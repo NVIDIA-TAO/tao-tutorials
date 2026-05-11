@@ -1,0 +1,131 @@
+# Cosmos-Embed1 fine-tuning config with LoRA (224p, MSR-VTT)
+#
+# LoRA enables parameter-efficient fine-tuning by only training low-rank adapters.
+# Requirements:
+#   - pip install peft
+#   - transformer_engine must be disabled (set to false)
+#
+# Usage: cosmos-embed1 train -e train_lora.yaml results_dir=/results
+
+results_dir: /results
+
+train:
+  seed: 1234
+  resume_training_checkpoint_path: null
+  max_iter: 50000
+  num_nodes: 1
+  num_gpus: 1
+  gpu_ids: [0]
+  validation_iter: 1000
+  checkpoint_iter: 1000
+  optim:
+    optim: fused_adamw
+    lr: 1e-5
+    weight_decay: 1e-5
+    betas: [0.9, 0.98]
+    warmup_steps: 1000
+    policy: cosine
+  clip_grad_norm: 3.0
+  precision: bf16
+  freeze_visual_encoder: true
+  use_captioning_loss: true
+  use_text_matching_loss: false
+  loss_weights:
+    contrastive_loss: 1.0
+    captioning_loss: 1.0
+    matching_loss: 1.0
+  callbacks:
+    wandb: {}
+    clamp_logit_scale: {}
+    logit_parameters_monitor: {}
+    iter_speed: {every_n: 50, save_s3: false}
+    gradient_clip: {clip_norm: 3.0}
+    grad_norm_monitor: {every_n: 500, verbose: false}
+    spectral_norm_monitor: {every_n: 1000, verbose: true}
+    ema: {}
+    log_losses: {every_n: 50, verbose: true}
+    text_frames_visualizer: {every_n: 500}
+    pca_feature_map_visualizer: {every_n: 500}
+    validation_eval: {}
+
+evaluate:
+  checkpoint: ${results_dir}/train/cosmos_embed1_model_latest.pth
+  load_dataset_pkl: null
+  save_dataset_pkl: null
+  callbacks:
+    topk_classification: true
+    embedding_visualization: true
+    top_k_values: [1, 3, 5, 10]
+    max_eval_samples: 2000
+
+inference:
+  checkpoint: ${results_dir}/train/cosmos_embed1_model_latest.pth
+  query:
+    input_videos: []
+    input_texts: []
+  k: 5
+  load_dataset_pkl: null
+  save_dataset_pkl: null
+
+model:
+  pretrained_model_path: /model/Cosmos-Embed1-224p
+  precision: bf16
+  # LoRA configuration - enabled for parameter-efficient fine-tuning
+  lora:
+    enabled: true
+    lora_rank: 8          # Rank of low-rank matrices (higher = more params)
+    lora_alpha: 16        # Scaling factor (typically 2x rank)
+    lora_dropout: 0.1     # Dropout for LoRA layers
+    bias: none            # Bias handling: none, all, or lora_only
+    use_rslora: false     # Rank-stabilized LoRA
+    use_dora: false       # Weight-decomposed LoRA
+    # Omit target_modules and modules_to_save to use defaults:
+    # ViT attention (qkv, proj), ViT MLP (fc1, fc2),
+    # Q-Former attention (query, key, value), Q-Former projections
+  network:
+    embed_dim: 256
+    num_query_tokens: 32
+    max_txt_len: 128
+    num_video_frames: 8
+    spatial_resolution: [224, 224]
+    temporal_encoding_type: neighboring_token_propagation
+    contrastive_type: clip
+    qformer_pretrain_ckpt: google-bert/bert-base-uncased
+    query_pooling_type: avg
+    pretrained_text_encoder: false
+    pretrained_visual_encoder: false
+    num_heldout_frames: 0
+    visual_encoder:
+      type: eva_vit_g
+      img_size: 224
+      pretrained: false
+      use_fp8: false
+      # Must be false for LoRA (PEFT cannot inject into Transformer Engine layers)
+      transformer_engine: false
+      checkpoint_activations: false
+      checkpoint_attention: false
+
+dataset:
+  train_dataset:
+    dataset_type: msrvtt
+    mp4_urls: /data/video/*.mp4
+    metadata: /data/msrvtt_test_1k.json
+    num_video_frames: 8
+    resolution: [224, 224]
+    batch_size: 4
+    workers: 4
+    split: test
+    random_caption: false
+    caption_to_label: {}
+
+  val_dataset:
+    dataset_type: msrvtt
+    mp4_urls: /data/video/*.mp4
+    metadata: /data/msrvtt_test_1k.json
+    num_video_frames: 8
+    resolution: [224, 224]
+    batch_size: 32
+    workers: 4
+    split: test
+    random_caption: false
+    caption_to_label: {}

@@ -1,7 +1,0 @@
-dest_file_name: train_256.zip
-resolution:
-- 256
-- 256
-results_dir: /results/dataset_convert
-source: /data/NEU_Metal_Surface_Defects_Data/train
-transform: null

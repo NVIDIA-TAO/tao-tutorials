@@ -9,7 +9,7 @@ train:
     momentum: 0.9
   num_epochs: 6
   freeze: ["backbone", "bert", "transformer.encoder", "input_proj"]
-  pretrained_model_path: /workspace/tao-experiments/grounding_dino/grounding_dino_vgrounding_dino_swin_tiny_commercial_trainable_v1.0/grounding_dino_swin_tiny_commercial_trainable.pth
+  pretrained_model_path: /workspace/tao-experiments/grounding_dino/grounding_dino_vgrounding_dino_swin_tiny_commercial_trainable_v1.1/grounding_dino_swin_tiny_commercial_trainable.pth
   precision: bf16
 dataset:
   train_data_sources:

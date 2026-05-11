@@ -1,0 +1,70 @@
+# SigLIP 2 (siglip2-so400m-patch16-256) - TAO Launcher Starter Kit
+results_dir: /results/siglip2
+
+train:
+  num_epochs: 5
+  checkpoint_interval: 1
+  resume_training_checkpoint_path: null
+  grad_checkpointing: false
+  grad_clip_norm: 1.0
+  precision: fp16
+  pretrained_model_path: null
+  loss_type: siglip
+  optim:
+    optimizer_type: adamw
+    vision_lr: 1e-6
+    text_lr: 1e-6
+    scheduler: cosine
+    betas: [0.9, 0.95]
+    eps: 1e-06
+    weight_decay: 1e-4
+    warmup_steps: 100
+  validation_interval: 1
+  val_check_interval: null
+
+dataset:
+  seed: 42
+  train:
+    type: custom
+    datasets:
+    - image_dir: /data/train/images
+      caption_dir: /data/train/captions
+      caption_file_suffix: .txt
+      image_list_file: null
+    batch_size: 16
+    num_workers: 4
+  val:
+    datasets:
+    - image_dir: /data/val/images
+      caption_dir: /data/val/captions
+      caption_file_suffix: .txt
+      image_list_file: null
+    batch_size: 16
+    num_workers: 4
+  augmentation:
+    scale: [0.4, 1.0]
+    color_jitter: [0.8, 0.32, 0.32, 0.32, 0.08]
+    grayscale: 0.2
+
+model:
+  type: siglip2-so400m-patch16-256
+  canonicalize_text: false
+
+evaluate:
+  checkpoint: ???
+  batch_size: 16
+
+inference:
+  checkpoint: ???
+  datasets:
+  - image_dir: /data/inference/images
+  batch_size: 16
+
+export:
+  checkpoint: ???
+  onnx_file: /results/siglip2/export/siglip2_v1.onnx
+  encoder_type: combined
+  input_height: 256
+  input_width: 256
+  batch_size: 1
+  opset_version: 17

@@ -1,0 +1,71 @@
+# RADIO-CLIP (C-RADIO v3-h image encoder + SigLIP 2 text encoder) - TAO Launcher Starter Kit
+results_dir: /results/radio-clip
+
+train:
+  num_epochs: 5
+  checkpoint_interval: 1
+  resume_training_checkpoint_path: null
+  grad_checkpointing: false
+  grad_clip_norm: null
+  precision: fp16
+  pretrained_model_path: null
+  loss_type: siglip
+  optim:
+    optimizer_type: adamw
+    vision_lr: 1e-5
+    text_lr: 1e-5
+    scheduler: cosine
+    betas: [0.9, 0.95]
+    eps: 1e-06
+    weight_decay: 1e-4
+    warmup_steps: 100
+  validation_interval: 1
+  val_check_interval: null
+
+dataset:
+  seed: 42
+  train:
+    type: custom
+    datasets:
+    - image_dir: /data/train/images
+      caption_dir: /data/train/captions
+      caption_file_suffix: .txt
+      image_list_file: null
+    batch_size: 16
+    num_workers: 4
+  val:
+    datasets:
+    - image_dir: /data/val/images
+      caption_dir: /data/val/captions
+      caption_file_suffix: .txt
+      image_list_file: null
+    batch_size: 16
+    num_workers: 4
+  augmentation:
+    scale: [0.4, 1.0]
+    color_jitter: [0.8, 0.32, 0.32, 0.32, 0.08]
+    grayscale: 0.2
+
+model:
+  type: c-radio_v3-h
+  adaptor_name: siglip2-g
+  canonicalize_text: false
+
+evaluate:
+  checkpoint: ???
+  batch_size: 16
+
+inference:
+  checkpoint: ???
+  datasets:
+  - image_dir: /data/inference/images
+  batch_size: 16
+
+export:
+  checkpoint: ???
+  onnx_file: /results/radio-clip/export/radio-clip_v1.onnx
+  encoder_type: combined
+  input_height: 224
+  input_width: 224
+  batch_size: 1
+  opset_version: 17

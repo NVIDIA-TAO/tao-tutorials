@@ -26,4 +26,4 @@ echo "Unzipping ${BASE_URL}"
 
 ${UNZIP} "hardhat.zip" -d ${OUTPUT_DIR}
 
-rm "${OUTPUT_DIR}/hardhat.zip
+rm "${OUTPUT_DIR}/hardhat.zip"

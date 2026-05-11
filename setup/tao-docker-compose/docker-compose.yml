@@ -111,17 +111,20 @@ services:
     image: ${IMAGE_TAO_API:-nvcr.io/ea-tlt/tao_ea/tao-toolkit_5.0.0-tf2.11.0_2507_inf:latest}
     container_name: tao_api_app
     pull_policy: always
-    command: ["/bin/bash", "-c", "if [ -f '${PYTHON_BASE_PATH:-/usr/local/lib/python}${PYTHON_VERSION:-3.12}/dist-packages/nvidia_tao_core/microservices/app_start.sh' ]; then /bin/bash ${PYTHON_BASE_PATH:-/usr/local/lib/python}${PYTHON_VERSION:-3.12}/dist-packages/nvidia_tao_core/microservices/app_start.sh; else /bin/bash ${PYTHON_BASE_PATH:-/usr/local/lib/python}${PYTHON_VERSION:-3.12}/site-packages/nvidia_tao_core/microservices/app_start.sh; fi"]
+    command: ["/bin/bash", "-c", "echo 'Setting up SSH keys for SLURM access...' && mkdir -p /home/www-data/.ssh && if [ -d /root/.ssh-host ] && [ -n \"$(ls -A /root/.ssh-host 2>/dev/null)\" ]; then echo 'Copying SSH keys from host...' && cp -v /root/.ssh-host/id_* /home/www-data/.ssh/ 2>&1 || echo 'Warning: No SSH keys found to copy' && cp -v /root/.ssh-host/known_hosts /home/www-data/.ssh/ 2>&1 || echo 'No known_hosts to copy' && ls -la /home/www-data/.ssh/ && chown -R www-data:www-data /home/www-data/.ssh && chmod 700 /home/www-data/.ssh && find /home/www-data/.ssh -type f -name 'id_*' ! -name '*.pub' -exec chmod 600 {} \\; && find /home/www-data/.ssh -type f -name '*.pub' -exec chmod 644 {} \\; && find /home/www-data/.ssh -type f -name 'known_hosts' -exec chmod 644 {} \\; && echo 'SSH keys setup complete'; else echo 'Warning: No SSH directory mounted at /root/.ssh-host'; fi && if [ -f '${PYTHON_BASE_PATH:-/usr/local/lib/python}${PYTHON_VERSION:-3.12}/dist-packages/nvidia_tao_core/microservices/app_start.sh' ]; then /bin/bash ${PYTHON_BASE_PATH:-/usr/local/lib/python}${PYTHON_VERSION:-3.12}/dist-packages/nvidia_tao_core/microservices/app_start.sh; else /bin/bash ${PYTHON_BASE_PATH:-/usr/local/lib/python}${PYTHON_VERSION:-3.12}/site-packages/nvidia_tao_core/microservices/app_start.sh; fi"]
     privileged: true
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./secrets.json:/var/secrets/secrets.json:ro
+      - ${HOME}/.ssh:/root/.ssh-host:ro
     environment:
       DOCKER_HOST: unix:///var/run/docker.sock
       DOCKER_NETWORK: tao_default
       HOST_PLATFORM: local-docker
       BACKEND: local-docker
       MONGOSECRET: mongosecret
+      HOST_SSH_PATH: ${HOME}/.ssh
+      SSH_KEY_PATH: /home/www-data/.ssh/id_ed25519
       CALLBACK_UUID: ${CALLBACK_UUID:-969a20c3-ab3a-5e47-ab27-0385d42c1738}
       HOSTBASEURL: ${HOSTBASEURL:-http://tao_api_app:8000}
       NUM_GPU_PER_NODE: ${NUM_GPU_PER_NODE:-1}
@@ -155,6 +158,7 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./secrets.json:/var/secrets/secrets.json:ro
+      - ${HOME}/.ssh:/root/.ssh:ro
     environment:
       DOCKER_HOST: unix:///var/run/docker.sock
       DOCKER_NETWORK: tao_default
@@ -162,6 +166,7 @@ services:
       BACKEND: local-docker
       DEBUG_MODE: "True"
       MONGOSECRET: mongosecret
+      HOST_SSH_PATH: ${HOME}/.ssh
       CALLBACK_UUID: ${CALLBACK_UUID:-969a20c3-ab3a-5e47-ab27-0385d42c1738}
       HOSTBASEURL: ${HOSTBASEURL:-http://tao_api_app:8000}
       NUM_GPU_PER_NODE: ${NUM_GPU_PER_NODE:-1}
