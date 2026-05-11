@@ -5,3 +5,5 @@
 # Python cache files.
 *.pyc
 
+# Workspace files
+workspace/
