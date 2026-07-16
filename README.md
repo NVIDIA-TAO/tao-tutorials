@@ -64,7 +64,7 @@ Download the TAO tutorial package which contains startup scripts, Jupyter notebo
 
     setup
         |--> quickstart_launcher.sh
-    notebooks
+    tutorials
         |--> tao_api_starter_kit
             |--> api
                 |--> automl
@@ -84,14 +84,17 @@ Download the TAO tutorial package which contains startup scripts, Jupyter notebo
         |--> tao_data_services
             |--> data
             |-->  ...
+        |--> tao_agent_skills_examples
+            |--> post_train_cosmos3
+                |--> post_train_cosmos3_lora.md
 
 The `tao_tutorials` repository is broadly classified into two components:
 
 * **setup:** A set of quick start scripts to help you install and deploy the TAO launcher.
-* **notebooks:** Beginner friendly end-to-end tutorial notebooks that will help you hit the ground running with TAO. The notebooks
+* **tutorials:** Beginner friendly end-to-end tutorials that will help you hit the ground running with TAO. The notebooks
   install TAO, download the required data, and run TAO commands end-to-end for various use cases.
 
-  These notebooks are split into three categories:
+  These tutorials are split into four categories:
 
    * `tao_api_starter_kit`: End-to-end notebooks that help you learn the features supported by the TAO API model of execution.
       The notebooks under the `api` directory work directly at the REST API level using REST API requests, while the `client` directory
@@ -100,6 +103,9 @@ The `tao_tutorials` repository is broadly classified into two components:
       computer-vision models supported in TAO. You can interact with TAO using the TAO launcher CLI.
    * `tao_data_services`: Sample notebooks that walk you through the end-to-end workflow of the different
       dataset manipulation and annotation tools that are included as part of TAO.
+   * `tao_agent_skills_examples`: Prompt-driven tutorials that use a coding agent and the
+      [TAO Skill Bank](https://github.com/NVIDIA-TAO/tao-skill-bank) to run TAO workflows end-to-end,
+      such as data preparation, training and post-training, evaluation, AutoML tuning, and deployment.
 
 ## <a name='HowtorunTAO'></a>How to run TAO?
 
@@ -117,6 +123,7 @@ You can run TAO in five different ways:
 
 ## <a name='Blogs'></a>Blogs
 
+[Post-Train NVIDIA Cosmos 3 in One Day Using Agent Skills](https://developer.nvidia.com/blog/post-train-nvidia-cosmos-3-in-one-day-using-agent-skills/) <br>
 [Train like a 'pro' with AutoML in TAO](https://developer.nvidia.com/blog/training-like-an-ai-pro-using-tao-automl/) <br>
 [Deploy TAO on Azure ML](https://developer.nvidia.com/blog/creating-custom-ai-models-using-nvidia-tao-toolkit-with-azure-machine-learning/) <br>
 [Synthetic Data and TAO](https://developer.nvidia.com/blog/developing-and-deploying-ai-powered-robots-with-nvidia-isaac-sim-and-nvidia-tao/) <br>

@@ -5,3 +5,4 @@
 # Python cache files.
 *.pyc
 
+.DS_Store
