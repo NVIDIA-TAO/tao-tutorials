@@ -1,0 +1,83 @@
+experiment:
+  name: "sean_test"
+  results_path: "results"
+  train_config: "specs/tao_spec.yaml"
+  eval_config: "specs/tao_spec.yaml"
+  visualize: true
+  visualize_embeddings: false
+
+iteration:
+  start: 1
+  end: 200
+
+training:
+  init_checkpoint: ""
+  continual_model: false
+  continual_dataset: true
+  num_nodes: 1
+
+mining:
+  # Need enough candidates to satisfy the 10K pair budget after
+  # duplicate image paths collapse and source-pair recovery.
+  topn: 100
+  knn_metric: "cosine"
+  knn_batch_size: 32
+  history_aware:
+    enabled: true
+    replay_fraction: 0.20
+  recovery:
+    caption_expansion:
+      enabled: false
+      mode: "nearest"
+      max_pairs_per_image_path: 2
+      max_expanded_pair_fraction: 0.25
+      dedupe_normalized_caption: true
+      count_expanded_pairs_toward_target: "auto"
+
+gap_analysis:
+  metric_name: "Rank-1"
+  weak_attribute_topk: 4
+  target_query_count: 10000
+  analyze_by_mAP: false
+  total_queries_mAP: 768
+  queries_per_slice: 256
+  query_types: "easy,medium"
+  caption_diversity:
+    enabled: true
+    history_file: "caption_selection_history.json"
+    coverage_target: 1.0
+    min_unique_texts_per_attribute: 8
+    max_rows_per_unique_text: 1
+    max_rows_per_image_path: 1
+
+pas:
+  train_pairs_source_file: "data/train_pairs.json"
+  pool_pairs_source_file: "data/train_pairs.json"
+  eval_pairs_source_file: "data/test_pairs.json"
+  train_image_dir: "data/PAS/NVIDIA_PAS_Filtered_06152026_V3.1_tao_ft_metadata_base_plus_val_test_medium_attr_matched_aug/images"
+  train_caption_dir: "data/NVIDIA_PAS_Filtered_06152026_V3.1_tao_ft_metadata_base_plus_val_test_medium_attr_matched_aug/captions"
+  source_image_dir: "data/NVIDIA_PAS_Filtered_06152026_V3.1_tao_ft_metadata_base_plus_val_test_medium_attr_matched_aug/images"
+  source_caption_dir: "data/NVIDIA_PAS_Filtered_06152026_V3.1_tao_ft_metadata_base_plus_val_test_medium_attr_matched_aug/captions"
+  eval_image_dir: "data/NVIDIA_PAS_Filtered_06152026_V3.1_tao_ft_metadata_base_plus_val_test_medium_attr_matched_aug/images"
+  eval_caption_dir: "data/NVIDIA_PAS_Filtered_06152026_V3.1_tao_ft_metadata_base_plus_val_test_medium_attr_matched_aug/captions"
+  seed_exclude_datasets: "CUHK_PEDES,ICFG_PEDES"
+  augmented_suffix: "_Aug"
+  query_types: "easy,medium,hard,natural_caption,original_captions"
+  mining_pool_mode: "real"
+  max_seed_rows: 0
+  max_aug_pool_rows: 0
+  val_sample_size: 512
+
+embedding:
+  model: "SigLIP2"
+  model_path: "siglip2-so400m-patch16-256"
+  batch_size: 64
+  num_gpus: 8
+
+lepton_e2e:
+  source_shard_rows: 250000
+  source_knn_batch_rows: 32768
+  viz_max_samples_per_group: 12
+  viz_max_total_samples: 96
+  viz_tile_size: 192
+

@@ -28,24 +28,14 @@ class PasDeftConfig:
     def __init__(
         self,
         config_path: str,
-        *,
-        cosmos_sft_lr: float = 1e-6,
-        guidance: int = 7,
-        num_output_frames: int = 500,
     ):
         self.config_path = config_path
-        self.cosmos_sft_lr = cosmos_sft_lr
-        self.guidance = guidance
-        self.num_output_frames = num_output_frames
 
         with open(config_path) as f:
             _cfg = yaml.safe_load(f)
 
         self.sweep_args_str: str = json.dumps({
             "config": config_path,
-            "cosmos_sft_lr": cosmos_sft_lr,
-            "guidance": guidance,
-            "num_output_frames": num_output_frames,
         })
 
         # ── Experiment ─────────────────────────────────────────────────────
@@ -110,9 +100,7 @@ class PasDeftConfig:
 
         # ── PAS ────────────────────────────────────────────────────────────
         _pas = _cfg["pas"]
-        self.pas_splits_dir: str = _pas.get(
-            "splits_dir", f"{self.base_experiment_path}/pas_splits"
-        )
+        self.pas_splits_dir: str = f"{self.base_experiment_path}/pas_splits"
         self.pas_seed_exclude_datasets: str = _pas.get(
             "seed_exclude_datasets", "CUHK_PEDES,ICFG_PEDES"
         )
@@ -177,7 +165,6 @@ class PasDeftConfig:
         )
 
         # ── Misc ───────────────────────────────────────────────────────────
-        self.tao_config_overrides: str = json.dumps(_cfg.get("tao", {}) or {})
         self.kratos_namespace: str = _cfg.get("kratos_namespace", "")
         self.iter_start: int = _cfg["iteration"]["start"]
         self.iter_end: int = _cfg["iteration"]["end"]

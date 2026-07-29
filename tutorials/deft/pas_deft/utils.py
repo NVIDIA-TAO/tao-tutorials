@@ -19,9 +19,13 @@ def create_clip_train_config(
     val_image_list_file: str = "",
     val_image_dir: str = "",
     val_caption_dir: str = "",
-    config_overrides: str = "",
 ) -> str:
     """Create a TAO CLIP training config YAML by patching a source config.
+
+    Only the fields the DEFT loop owns (results dir, checkpoint, dataset
+    entries) are patched. Every other TAO setting — model, optimizer, batch
+    sizes, GPU counts — is taken from ``base_config_yaml`` as-is and must be
+    edited there directly.
 
     Args:
         base_config_yaml:       Path to the source YAML config.
@@ -39,7 +43,6 @@ def create_clip_train_config(
         val_image_list_file:    Explicit image list for ``dataset.val``.
         val_image_dir:          ``image_dir`` for the val dataset.
         val_caption_dir:        ``caption_dir`` for the val dataset.
-        config_overrides:       JSON string of deep-merge overrides.
 
     Returns:
         Path to the newly written config YAML.
@@ -51,27 +54,10 @@ def create_clip_train_config(
 
     sweep_args = json.loads(sweep_args)
 
-    def _apply_config_overrides(config, raw_overrides):
-        if not raw_overrides:
-            return
-        overrides = json.loads(raw_overrides)
-        if not isinstance(overrides, dict):
-            return
-
-        def _merge(dst, src):
-            for key, value in src.items():
-                if isinstance(value, dict) and isinstance(dst.get(key), dict):
-                    _merge(dst[key], value)
-                else:
-                    dst[key] = value
-
-        _merge(config, overrides)
-
     with open(base_config_yaml, "r") as f:
         config_data = yaml.safe_load(f)
 
     config_data["results_dir"] = output_dir
-    _apply_config_overrides(config_data, config_overrides)
     for section_name in ("evaluate", "inference", "export"):
         section = config_data.get(section_name)
         if not isinstance(section, dict):
@@ -240,9 +226,12 @@ def create_clip_eval_config(
     eval_caption_dir: str = "",
     eval_image_list_file: str = "",
     caption_file_suffix: str = ".txt",
-    config_overrides: str = "",
 ) -> str:
     """Create a TAO CLIP evaluation config YAML by patching a template.
+
+    Only the fields the DEFT loop owns (results dir, checkpoint, eval
+    dataset) are patched; all other TAO settings come from
+    ``base_config_yaml`` as-is and must be edited there directly.
 
     Args:
         base_config_yaml: Path to the template YAML config file.
@@ -253,37 +242,18 @@ def create_clip_eval_config(
         eval_caption_dir: Optional evaluation caption root.
         eval_image_list_file: Optional evaluation image list.
         caption_file_suffix: Caption suffix for the evaluation dataset.
-        config_overrides: JSON string of deep-merge overrides.
 
     Returns:
         Path to the newly written config YAML.
     """
-    import json
     import os
 
     import yaml
-
-    def _apply_config_overrides(config, raw_overrides):
-        if not raw_overrides:
-            return
-        overrides = json.loads(raw_overrides)
-        if not isinstance(overrides, dict):
-            return
-
-        def _merge(dst, src):
-            for key, value in src.items():
-                if isinstance(value, dict) and isinstance(dst.get(key), dict):
-                    _merge(dst[key], value)
-                else:
-                    dst[key] = value
-
-        _merge(config, overrides)
 
     with open(base_config_yaml, "r") as f:
         config_data = yaml.safe_load(f)
 
     config_data["results_dir"] = output_dir
-    _apply_config_overrides(config_data, config_overrides)
     for section_name in ("evaluate", "inference", "export"):
         section = config_data.get(section_name)
         if not isinstance(section, dict):
