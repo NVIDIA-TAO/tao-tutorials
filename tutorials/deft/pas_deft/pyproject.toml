@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "clip-deft"
+version = "0.1.0"
+description = "CLIP DEFT pipeline utilities — data mining, gap analysis, config generation, and visualization"
+requires-python = ">=3.8"
+dependencies = [
+    "pyyaml",
+    "pandas>=1.5",
+    "pyarrow>=10",
+    "numpy",
+    "scikit-learn",
+    "matplotlib",
+    "Pillow",
+    "toml",
+]
+
+[tool.setuptools]
+packages = ["pas_deft"]
+zip-safe = false
+
+[tool.setuptools.package-dir]
+"pas_deft" = "."
+
+[tool.setuptools.package-data]
+"pas_deft" = ["*.yaml", "py.typed"]
