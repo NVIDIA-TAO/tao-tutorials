@@ -3,9 +3,9 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "clip-deft"
+name = "pas-deft"
 version = "0.1.0"
-description = "CLIP DEFT pipeline utilities — data mining, gap analysis, config generation, and visualization"
+description = "PAS DEFT pipeline utilities — data mining, gap analysis, config generation, and visualization"
 requires-python = ">=3.8"
 dependencies = [
     "pyyaml",
