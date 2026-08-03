@@ -295,6 +295,263 @@ def create_clip_eval_config(
     print(f"Created CLIP eval config at {new_config_yaml}")
     return new_config_yaml
 
+
+def get_current_checkpoint(
+    train_output_dir: str,
+    checkpoint_relpath: str = "best/clip_best_val_t2i_mAP.pth",
+    metric_name: str = "val/t2i_mAP",
+) -> str:
+    """Select the best epoch checkpoint from a TAO CLIP training run.
+
+    TAO's CLIP schema does not accept a top-k checkpointer stanza, so training
+    only emits per-epoch checkpoints plus ``clip_latest.pth``. This picks the
+    epoch checkpoint whose validation metric is best and publishes it at
+    ``checkpoint_relpath`` (symlink, falling back to hardlink then copy), which
+    is the path the eval and next-iteration configs expect.
+
+    Metrics are read from TensorBoard when available, otherwise from the
+    per-line ``kpi`` records in ``status.json``. Only stdlib is required;
+    TensorBoard is used opportunistically.
+
+    Args:
+        train_output_dir:   Root training output directory
+                            (``train.results_dir``).
+        checkpoint_relpath: Publish location, relative to train_output_dir.
+        metric_name:        Validation metric to maximise.
+
+    Returns:
+        Full path to the published checkpoint.
+
+    Raises:
+        FileNotFoundError: If no checkpoints exist under train_output_dir.
+    """
+    import json
+    import os
+    import re
+    import shutil
+
+    train_output_dir = os.path.abspath(train_output_dir)
+    ckpt_path = os.path.join(train_output_dir, checkpoint_relpath)
+
+    if os.path.exists(ckpt_path):
+        print(f"Best checkpoint already published: {ckpt_path}")
+        return ckpt_path
+
+    def _checkpoint_candidates():
+        """Epoch checkpoints, oldest first.
+
+        Skips best/, clip_latest.pth, and normalised copies.
+        """
+        candidates = []
+        for root, _, files in os.walk(train_output_dir):
+            rel_root = os.path.relpath(root, train_output_dir)
+            rel_root = "" if rel_root == "." else rel_root.replace(os.sep, "/")
+            if rel_root.startswith("best"):
+                continue
+            for filename in files:
+                lower_name = filename.lower()
+                if not lower_name.endswith((".pth", ".ckpt", ".safetensors")):
+                    continue
+                if "latest" in lower_name:
+                    continue
+                if lower_name.endswith("_pretrained.pth"):
+                    continue
+                if ".tmp" in lower_name:
+                    continue
+                path = os.path.join(root, filename)
+                match = re.search(r"epoch[_=]?(\d+).*step[_=]?(\d+)", filename)
+                candidates.append({
+                    "path": path,
+                    "epoch": int(match.group(1)) if match else None,
+                    "step": int(match.group(2)) if match else None,
+                    "mtime": os.path.getmtime(path),
+                })
+        return sorted(
+            candidates,
+            key=lambda item: (
+                item["step"] if item["step"] is not None else -1,
+                item["epoch"] if item["epoch"] is not None else -1,
+                item["mtime"],
+            ),
+        )
+
+    def _read_tensorboard_metrics():
+        metrics = []
+        try:
+            from tensorboard.backend.event_processing.event_accumulator import (
+                EventAccumulator,
+            )
+        except Exception:
+            return metrics
+        logs_dir = os.path.join(train_output_dir, "lightning_logs")
+        if not os.path.isdir(logs_dir):
+            return metrics
+        for root, _, files in os.walk(logs_dir):
+            if not any(f.startswith("events.out.tfevents") for f in files):
+                continue
+            try:
+                accumulator = EventAccumulator(root)
+                accumulator.Reload()
+                scalar_tags = set(accumulator.Tags().get("scalars", []))
+            except Exception:
+                continue
+            tag = metric_name
+            if tag not in scalar_tags:
+                tag = metric_name.replace("/", "_")
+            if tag not in scalar_tags:
+                continue
+            for event in accumulator.Scalars(tag):
+                try:
+                    value = float(event.value)
+                except (TypeError, ValueError):
+                    continue
+                metrics.append({
+                    "step": int(event.step),
+                    "epoch": None,
+                    "value": value,
+                    "source": "tensorboard",
+                })
+        return metrics
+
+    def _read_status_metrics():
+        """Parse status.json.
+
+        Carries the most recent epoch/step onto each kpi record.
+        """
+        metrics = []
+        status_path = os.path.join(train_output_dir, "status.json")
+        if not os.path.isfile(status_path):
+            return metrics
+        latest_epoch = None
+        latest_step = None
+        with open(status_path, "r", encoding="utf-8") as f:
+            for raw_line in f:
+                raw_line = raw_line.strip().rstrip(",")
+                if not raw_line:
+                    continue
+                try:
+                    record = json.loads(raw_line)
+                except json.JSONDecodeError:
+                    continue
+                if "epoch" in record:
+                    try:
+                        latest_epoch = int(record["epoch"])
+                    except (TypeError, ValueError):
+                        pass
+                if "step" in record:
+                    try:
+                        latest_step = int(record["step"])
+                    except (TypeError, ValueError):
+                        pass
+                kpi = record.get("kpi") or {}
+                if metric_name not in kpi:
+                    continue
+                try:
+                    value = float(kpi[metric_name])
+                except (TypeError, ValueError):
+                    continue
+                metrics.append({
+                    "step": latest_step,
+                    "epoch": latest_epoch,
+                    "value": value,
+                    "source": "status",
+                })
+        return metrics
+
+    def _match_checkpoint(best_metric, candidates):
+        """Checkpoint written at, or last before, the best metric's step."""
+        if not candidates:
+            return None
+        metric_step = best_metric.get("step")
+        if metric_step is not None:
+            exact = [
+                item for item in candidates
+                if item["step"] is not None and item["step"] == metric_step
+            ]
+            if exact:
+                return exact[-1]
+            before = [
+                item for item in candidates
+                if item["step"] is not None and item["step"] <= metric_step
+            ]
+            if before:
+                return before[-1]
+            return min(
+                candidates,
+                key=lambda item: abs(
+                    (item["step"] if item["step"] is not None else 0)
+                    - metric_step
+                ),
+            )
+        metric_epoch = best_metric.get("epoch")
+        if metric_epoch is not None:
+            exact = [
+                item for item in candidates
+                if item["epoch"] is not None and item["epoch"] == metric_epoch
+            ]
+            if exact:
+                return exact[-1]
+        return candidates[-1]
+
+    def _publish_selected(selected, best_metric=None):
+        selected_path = selected["path"]
+        os.makedirs(os.path.dirname(ckpt_path), exist_ok=True)
+        if os.path.lexists(ckpt_path):
+            os.remove(ckpt_path)
+        try:
+            os.symlink(
+                os.path.relpath(selected_path, os.path.dirname(ckpt_path)),
+                ckpt_path,
+            )
+            link_mode = "symlink"
+        except OSError:
+            try:
+                os.link(selected_path, ckpt_path)
+                link_mode = "hardlink"
+            except OSError:
+                shutil.copy2(selected_path, ckpt_path)
+                link_mode = "copy"
+        meta_path = os.path.splitext(ckpt_path)[0] + ".json"
+        with open(meta_path, "w", encoding="utf-8") as f:
+            json.dump({
+                "selected_checkpoint": selected_path,
+                "published_checkpoint": ckpt_path,
+                "metric_name": metric_name,
+                "metric": best_metric,
+                "publish_mode": link_mode,
+            }, f, indent=2)
+        print(f"Published best checkpoint ({link_mode}): {ckpt_path}")
+        return ckpt_path
+
+    candidates = _checkpoint_candidates()
+    metrics = _read_tensorboard_metrics() or _read_status_metrics()
+
+    if metrics and candidates:
+        best_metric = max(
+            metrics,
+            key=lambda item: (
+                item["value"],
+                item["step"] if item.get("step") is not None else -1,
+            ),
+        )
+        selected = _match_checkpoint(best_metric, candidates)
+        if selected:
+            print(
+                f"Selected best checkpoint by {metric_name}="
+                f"{best_metric['value']:.6g} from {best_metric['source']}: "
+                f"{selected['path']}"
+            )
+            return _publish_selected(selected, best_metric)
+
+    if candidates:
+        print(f"No {metric_name} metric found; using newest checkpoint.")
+        return _publish_selected(candidates[-1], None)
+
+    raise FileNotFoundError(
+        f"No checkpoints found under {train_output_dir}"
+    )
+
+
 def normalize_clip_pretrained_checkpoint(
     checkpoint_path: str,
     output_path: str = "",

@@ -51,15 +51,15 @@ gap_analysis:
     max_rows_per_image_path: 1
 
 pas:
-  train_pairs_source_file: "data/train_pairs.json"
-  pool_pairs_source_file: "data/train_pairs.json"
-  eval_pairs_source_file: "data/test_pairs.json"
-  train_image_dir: "data/PAS/NVIDIA_PAS_Filtered_06152026_V3.1_tao_ft_metadata_base_plus_val_test_medium_attr_matched_aug/images"
-  train_caption_dir: "data/NVIDIA_PAS_Filtered_06152026_V3.1_tao_ft_metadata_base_plus_val_test_medium_attr_matched_aug/captions"
-  source_image_dir: "data/NVIDIA_PAS_Filtered_06152026_V3.1_tao_ft_metadata_base_plus_val_test_medium_attr_matched_aug/images"
-  source_caption_dir: "data/NVIDIA_PAS_Filtered_06152026_V3.1_tao_ft_metadata_base_plus_val_test_medium_attr_matched_aug/captions"
-  eval_image_dir: "data/NVIDIA_PAS_Filtered_06152026_V3.1_tao_ft_metadata_base_plus_val_test_medium_attr_matched_aug/images"
-  eval_caption_dir: "data/NVIDIA_PAS_Filtered_06152026_V3.1_tao_ft_metadata_base_plus_val_test_medium_attr_matched_aug/captions"
+  # train_pairs_source_file: "/media/scratch.metropolis4/users/seanf/NVIDIA_PAS_Filtered_06152026_V3.1.2_tao_ft_metadata_base_plus_val_test_medium_attr_matched_aug_val20_accessory_v2.1/train_pairs.json"
+  pool_pairs_source_file: "/media/scratch.metropolis4/users/seanf/NVIDIA_PAS_Filtered_06152026_V3.1.2_tao_ft_metadata_base_plus_val_test_medium_attr_matched_aug_val20_accessory_v2.1/train_pairs.json"
+  eval_pairs_source_file: "/media/scratch.metropolis4/users/seanf/NVIDIA_PAS_Filtered_06152026_V3.1.2_tao_ft_metadata_base_plus_val_test_medium_attr_matched_aug_val20_accessory_v2.1/test_pairs.json"
+  train_image_dir: "/media/scratch.metropolis4/users/seanf/NVIDIA_PAS_Filtered_06152026_V3.1.2_tao_ft_metadata_base_plus_val_test_medium_attr_matched_aug_val20_accessory_v2.1/images"
+  train_caption_dir: "/media/scratch.metropolis4/users/seanf/NVIDIA_PAS_Filtered_06152026_V3.1.2_tao_ft_metadata_base_plus_val_test_medium_attr_matched_aug_val20_accessory_v2.1/captions"
+  source_image_dir: "/media/scratch.metropolis4/users/seanf/NVIDIA_PAS_Filtered_06152026_V3.1.2_tao_ft_metadata_base_plus_val_test_medium_attr_matched_aug_val20_accessory_v2.1/images"
+  source_caption_dir: "/media/scratch.metropolis4/users/seanf/NVIDIA_PAS_Filtered_06152026_V3.1.2_tao_ft_metadata_base_plus_val_test_medium_attr_matched_aug_val20_accessory_v2.1/captions"
+  eval_image_dir: "/media/scratch.metropolis4/users/seanf/NVIDIA_PAS_Filtered_06152026_V3.1.2_tao_ft_metadata_base_plus_val_test_medium_attr_matched_aug_val20_accessory_v2.1/images"
+  eval_caption_dir: "/media/scratch.metropolis4/users/seanf/NVIDIA_PAS_Filtered_06152026_V3.1.2_tao_ft_metadata_base_plus_val_test_medium_attr_matched_aug_val20_accessory_v2.1/captions"
   seed_exclude_datasets: "CUHK_PEDES,ICFG_PEDES"
   augmented_suffix: "_Aug"
   query_types: "easy,medium,hard,natural_caption,original_captions"
@@ -80,4 +80,3 @@ lepton_e2e:
   viz_max_samples_per_group: 12
   viz_max_total_samples: 96
   viz_tile_size: 192
-
