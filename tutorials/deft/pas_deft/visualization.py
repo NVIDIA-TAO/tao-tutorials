@@ -1,23 +1,42 @@
-"""Visualization utilities for the DEFT pipeline.
+"""Visualization utilities for the CLIP DEFT pipeline.
 
-Computes embeddings for weak samples, newly generated samples, and
-previous training data, then produces a t-SNE scatter plot that
-overlays all three categories with distinct colors.
+Computes embeddings for weak-query samples, mined samples, and previous
+training data, then produces a t-SNE scatter plot that overlays all three
+categories with distinct colors.
 
-Note: create_image_embeddings_task, create_text_embeddings_task, and
-create_video_embeddings_task are omitted — they build Kubeflow pipeline
-tasks and cannot be called locally.
+Note: ``create_image_embeddings_task``, ``create_text_embeddings_task``, and
+``create_video_embeddings_task`` from the Kratos pipeline are omitted — they
+build Kubeflow tasks and cannot be called locally.  Run the equivalent
+dockerised command instead::
+
+    docker run ... {tao_ds_image} embedding image_embeddings \\
+        -e /specs/image_embed_spec.yaml \\
+        input_parquet=/<input> output_parquet=/<output>
 """
 
 
-def prepare_weak_samples_for_embedding(
-    gaps_parquet: str, output_parquet_path: str,
+def prepare_clip_images_for_embedding(
+    input_parquet: str,
+    output_parquet_path: str,
+    image_dir: str = "",
 ) -> str:
-    """Extract file paths from the gap-analysis parquet for embedding.
+    """Build a unique image-filepath parquet ready for image embedding.
+
+    Works on any CLIP-side parquet that carries a ``filepath`` (or
+    ``unique_name``) column: the gap-analysis ``kpi_gaps.parquet``, the k-NN
+    ``mined_samples.parquet``, or a previous-training-data pool parquet.  Those
+    tables hold one row per (image, caption) query pair, so the same image
+    appears many times; embedding them as-is re-encodes duplicates and chokes on
+    rows whose ``filepath`` is empty.  This drops blanks, deduplicates on
+    ``filepath``, and keeps the metadata columns t-SNE and the contact sheets
+    use.
 
     Args:
-        gaps_parquet:       Path to the KPI gaps parquet.
-        output_parquet_path: Where to write the output parquet.
+        input_parquet:       Parquet with a ``filepath`` and/or ``unique_name``
+                             column.
+        output_parquet_path: Where to write the deduplicated parquet.
+        image_dir:           Image root used to resolve ``unique_name`` when a
+                             row has no ``filepath``.  Optional.
 
     Returns:
         The path to the written parquet file.
@@ -26,77 +45,50 @@ def prepare_weak_samples_for_embedding(
 
     import pandas as pd
 
-    df = pd.read_parquet(gaps_parquet)
-    out_df = pd.DataFrame({"filepath": df["video_id"]})
+    keep_cols = (
+        "filepath", "unique_name", "image_path", "text", "caption",
+        "query_type", "dataset", "label", "weak_attribute",
+    )
 
-    os.makedirs(os.path.dirname(output_parquet_path), exist_ok=True)
-    out_df.to_parquet(output_parquet_path, index=False)
+    df = pd.read_parquet(input_parquet)
 
-    print(f"Prepared {len(out_df)} weak samples -> {output_parquet_path}")
-    return output_parquet_path
+    if "filepath" not in df.columns and "unique_name" not in df.columns:
+        raise ValueError(
+            f"{input_parquet} has neither a 'filepath' nor a 'unique_name' "
+            f"column; found {list(df.columns)}"
+        )
 
+    out = df[[c for c in keep_cols if c in df.columns]].copy()
 
-def prepare_generated_samples_for_embedding(
-    generated_parquet: str, output_parquet_path: str,
-) -> str:
-    """Extract file paths from the generated-data parquet for embedding.
+    if "filepath" in out.columns:
+        out["filepath"] = out["filepath"].fillna("").astype(str).str.strip()
+    else:
+        out["filepath"] = ""
 
-    Args:
-        generated_parquet:  Path to the merged Cosmos-Predict parquet.
-        output_parquet_path: Where to write the output parquet.
+    # Fall back to image_dir/unique_name for rows the upstream step left blank.
+    if image_dir and "unique_name" in out.columns:
+        names = out["unique_name"].fillna("").astype(str).str.strip()
+        missing = (out["filepath"] == "") & (names != "")
+        if missing.any():
+            out.loc[missing, "filepath"] = names[missing].map(
+                lambda n: os.path.abspath(os.path.join(image_dir, n)),
+            )
 
-    Returns:
-        The path to the written parquet file.
-    """
-    import os
+    total = len(out)
+    out = out[out["filepath"] != ""]
+    dropped = total - len(out)
+    out = out.drop_duplicates(subset=["filepath"]).reset_index(drop=True)
 
-    import pandas as pd
+    out_dir = os.path.dirname(output_parquet_path)
+    if out_dir:
+        os.makedirs(out_dir, exist_ok=True)
+    out.to_parquet(output_parquet_path, index=False)
 
-    df = pd.read_parquet(generated_parquet)
-    out_df = pd.DataFrame({"filepath": df["generated_video_path"]})
-
-    os.makedirs(os.path.dirname(output_parquet_path), exist_ok=True)
-    out_df.to_parquet(output_parquet_path, index=False)
-
-    print(f"Prepared {len(out_df)} generated samples -> {output_parquet_path}")
-    return output_parquet_path
-
-
-def prepare_previous_data_for_embedding(
-    prev_annotations_path: str, output_parquet_path: str,
-    train_media_path: str,
-) -> str:
-    """Extract file paths from previous training annotations for embedding.
-
-    Args:
-        prev_annotations_path: Path to the previous iteration's annotation JSON,
-                               or empty string if there are no prior annotations.
-        output_parquet_path:   Where to write the output parquet.
-        train_media_path:      Root directory for resolving relative video paths.
-
-    Returns:
-        The path to the written parquet file.
-    """
-    import json
-    import os
-
-    import pandas as pd
-
-    filepaths = []
-    if prev_annotations_path and os.path.exists(prev_annotations_path):
-        with open(prev_annotations_path, "r") as f:
-            data = json.load(f)
-        filepaths = [entry['video']
-                     if os.path.isabs(entry['video'])
-                     else os.path.join(train_media_path, entry['video'])
-                     for entry in data if 'video' in entry]
-
-    out_df = pd.DataFrame({"filepath": filepaths})
-
-    os.makedirs(os.path.dirname(output_parquet_path), exist_ok=True)
-    out_df.to_parquet(output_parquet_path, index=False)
-
-    print(f"Prepared {len(out_df)} previous samples -> {output_parquet_path}")
+    print(
+        f"Prepared {len(out)} unique images from {total} rows in "
+        f"{input_parquet} ({dropped} rows had no filepath) -> "
+        f"{output_parquet_path}"
+    )
     return output_parquet_path
 
 

@@ -4,7 +4,7 @@ experiment:
   train_config: "specs/tao_spec.yaml"
   eval_config: "specs/tao_spec.yaml"
   visualize: true
-  visualize_embeddings: false
+  visualize_embeddings: true
 
 iteration:
   start: 1
