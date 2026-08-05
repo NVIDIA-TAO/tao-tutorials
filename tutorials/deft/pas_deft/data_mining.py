@@ -8,6 +8,9 @@
 - :func:`merge_train_csvs` — merge augmentation CSVs with the base training set.
 - :func:`convert_clip_image_list_to_parquet` — CLIP image list → embedding parquet.
 - :func:`convert_mined_parquet_to_clip_image_list` — mined parquet → CLIP image-list + pairs.
+- :func:`summarize_knn_mining` — post-k-NN mining summary (txt + json).
+- :func:`track_cumulative_mined_unique_names` — cumulative mined names across iterations.
+- :func:`write_iteration_summary` — per-iteration artifact/checkpoint summary.
 """
 
 
@@ -628,8 +631,28 @@ def convert_mined_parquet_to_clip_image_list(
     caption_expansion_dedupe_normalized_caption: str = "true",
     caption_expansion_count_expanded_pairs_toward_target: str = "auto",
     source_embedding_shards_dir: str = "",
+    write_detailed_csv: str = "true",
+    source_embeddings_parquet: str = "",
+    target_embeddings_parquet: str = "",
 ) -> str:
-    """Convert mined filepaths into CLIP image-list, pairs, and stats files."""
+    """Convert mined filepaths into CLIP image-list, pairs, and stats files.
+
+    When history-aware selection runs downstream, call this with
+    ``target_query_count=0`` so the candidate set stays uncapped: the budget
+    belongs to the selector, which spends it after partitioning novel from
+    previously-committed names. ``write_detailed_csv`` should be off in that
+    case, since the selector writes its own detail CSV over the committed
+    selection and this one would only describe discarded candidates.
+
+    The mine step emits only ``filepath``, so the candidate order it produces
+    is its emission order — grouped by target query, not by similarity.
+    Truncating that to ``target_query_count`` starves whichever weak queries
+    happen to sit at the tail of the file. Pass ``source_embeddings_parquet``
+    and ``target_embeddings_parquet`` (both are already written upstream) to
+    recompute each candidate's best cosine similarity to any weak query and
+    order by it first. Skipped when the mined parquet already carries a
+    ``score`` column, so a future mine step that emits scores directly wins.
+    """
     import json
     import math
     import os
@@ -773,6 +796,119 @@ def convert_mined_parquet_to_clip_image_list(
             f"'filepath' column; found {list(mined.columns)}"
         )
 
+    def _rescore_by_similarity(mined_df):
+        """Order candidates by best cosine similarity to any weak query.
+
+        Streams the source-pool embeddings in batches and keeps only the
+        mined rows, so peak memory is one batch plus the mined subset rather
+        than the whole pool (which runs to several GB).
+        """
+        import pyarrow.parquet as pq
+
+        for label, path in (
+            ("source", source_embeddings_parquet),
+            ("target", target_embeddings_parquet),
+        ):
+            if not os.path.isfile(path):
+                print(
+                    f"{label} embeddings parquet not found at {path}; "
+                    "keeping mined order"
+                )
+                return mined_df, False
+
+        wanted = set(mined_df["filepath"].astype(str))
+        target_df = pd.read_parquet(target_embeddings_parquet)
+        if "embedding" not in target_df.columns or not len(target_df):
+            print(
+                "Target embeddings unusable for rescoring "
+                f"({target_embeddings_parquet}); keeping mined order"
+            )
+            return mined_df, False
+
+        paths, vectors = [], []
+        parquet_file = pq.ParquetFile(source_embeddings_parquet)
+        for batch in parquet_file.iter_batches(
+            columns=["filepath", "embedding"], batch_size=65536,
+        ):
+            chunk = batch.to_pandas()
+            chunk = chunk[chunk["filepath"].astype(str).isin(wanted)]
+            if len(chunk):
+                paths.extend(chunk["filepath"].astype(str).tolist())
+                vectors.extend(chunk["embedding"].tolist())
+        if not paths:
+            print(
+                "No mined filepath matched the source embeddings at "
+                f"{source_embeddings_parquet}; keeping mined order"
+            )
+            return mined_df, False
+
+        candidates = np.asarray(np.vstack(vectors), dtype=np.float32)
+        targets = np.asarray(
+            np.vstack(target_df["embedding"].to_numpy()), dtype=np.float32,
+        )
+        candidates /= np.maximum(
+            np.linalg.norm(candidates, axis=1, keepdims=True), 1e-12,
+        )
+        targets /= np.maximum(
+            np.linalg.norm(targets, axis=1, keepdims=True), 1e-12,
+        )
+        similarity = candidates @ targets.T
+        best_target = similarity.argmax(axis=1)
+        best_score = similarity.max(axis=1)
+
+        scored = pd.DataFrame({"filepath": paths, "score": best_score})
+        # Recovering which weak query each candidate is nearest to also
+        # restores the per-attribute mining-coverage breakdown.
+        for column, out_name in (
+            ("query_type", "target_query_type"),
+            ("weak_attribute", "target_attribute"),
+        ):
+            if column in target_df.columns:
+                scored[out_name] = target_df[column].to_numpy()[best_target]
+        scored = (
+            scored.sort_values("score", ascending=False)
+            .drop_duplicates(subset=["filepath"])
+        )
+
+        merged = mined_df.merge(scored, on="filepath", how="left")
+        unscored = int(merged["score"].isna().sum())
+        merged = merged.sort_values(
+            "score", ascending=False, na_position="last", kind="mergesort",
+        ).reset_index(drop=True)
+        print(
+            f"Rescored {len(scored)} mined candidates against "
+            f"{len(target_df)} weak queries "
+            f"({unscored} had no source embedding and sort last); "
+            f"score range {merged['score'].min():.4f}..{merged['score'].max():.4f}"
+        )
+        return merged, True
+
+    rescored_by_similarity = False
+    if "score" in mined.columns:
+        # A mine step that emits scores directly wins; just honour it.
+        mined = mined.sort_values(
+            "score", ascending=False, na_position="last", kind="mergesort",
+        ).reset_index(drop=True)
+        rescored_by_similarity = True
+        print("Mined parquet carries a score column; ordered by it directly.")
+    elif source_embeddings_parquet and target_embeddings_parquet:
+        try:
+            mined, rescored_by_similarity = _rescore_by_similarity(mined)
+        except Exception as exc:  # noqa: BLE001
+            # Ordering is an optimisation; a failure here must not take the
+            # whole conversion down. The warning below still fires, so a
+            # degraded run is never silent.
+            print(f"Similarity rescoring failed ({type(exc).__name__}: {exc})")
+            rescored_by_similarity = False
+    if not rescored_by_similarity:
+        print(
+            "WARNING: mined candidates are in the mine step's emission order, "
+            "which is grouped by target query rather than by similarity. Any "
+            "target_query_count truncation below will keep whichever queries "
+            "come first in the file, not the nearest images. Pass "
+            "source_embeddings_parquet and target_embeddings_parquet to fix."
+        )
+
     raw_rows = len(mined)
     raw_unique_filepaths = int(mined["filepath"].drop_duplicates().shape[0])
     raw_unique_names = 0
@@ -784,6 +920,7 @@ def convert_mined_parquet_to_clip_image_list(
             .shape[0]
         )
     target_query_count = int(target_query_count or 0)
+    write_details = _truthy(write_detailed_csv)
     basenames = (
         mined.apply(_mined_unique_name, axis=1)
         .loc[lambda values: values.astype(bool)]
@@ -1174,29 +1311,33 @@ def convert_mined_parquet_to_clip_image_list(
             final_expanded_pairs += 1
         else:
             final_anchor_pairs += 1
-        detail_records.append({
-            "unique_name": name,
-            "pair_index": pair_idx,
-            "filepath": os.path.abspath(os.path.join(image_dir, name)),
-            "dataset": dataset,
-            "query_type": qtype,
-            "image_path": image_path,
-            "caption": _pair_caption(pair),
-            "is_caption_expansion": bool(is_expansion),
-            "anchor_unique_name": anchor_name if is_expansion else "",
-            "caption_expansion_score": (
-                "" if expansion_score is None else float(expansion_score)
-            ),
-        })
+        if write_details:
+            detail_records.append({
+                "unique_name": name,
+                "pair_index": pair_idx,
+                "filepath": os.path.abspath(os.path.join(image_dir, name)),
+                "dataset": dataset,
+                "query_type": qtype,
+                "image_path": image_path,
+                "caption": _pair_caption(pair),
+                "is_caption_expansion": bool(is_expansion),
+                "anchor_unique_name": anchor_name if is_expansion else "",
+                "caption_expansion_score": (
+                    "" if expansion_score is None else float(expansion_score)
+                ),
+            })
     caption_expansion_stats["final_anchor_pairs"] = int(final_anchor_pairs)
     caption_expansion_stats["final_expanded_pairs"] = int(final_expanded_pairs)
     caption_expansion_stats["final_unique_image_paths"] = int(len(final_image_paths))
 
-    detail_df = pd.DataFrame(detail_records)
     stats_json_path = os.path.join(out_dir or ".", "mined_stats.json")
     stats_txt_path = os.path.join(out_dir or ".", "mined_stats.txt")
-    details_csv_path = os.path.join(out_dir or ".", "mined_samples_detailed.csv")
-    detail_df.to_csv(details_csv_path, index=False)
+    details_csv_path = ""
+    if write_details:
+        details_csv_path = os.path.join(
+            out_dir or ".", "mined_samples_detailed.csv"
+        )
+        pd.DataFrame(detail_records).to_csv(details_csv_path, index=False)
 
     stats = {
         "mined_parquet": mined_parquet,
@@ -1272,7 +1413,7 @@ def convert_mined_parquet_to_clip_image_list(
         f"{caption_expansion_stats['final_expanded_pairs']}",
         f"Image list: {output_image_list_file}",
         f"Pairs JSON: {train_pairs_file or '(not written)'}",
-        f"Detailed CSV: {details_csv_path}",
+        f"Detailed CSV: {details_csv_path or '(disabled)'}",
         f"Stats JSON: {stats_json_path}",
         "",
         "By dataset (pair rows):",
@@ -1324,3 +1465,232 @@ def convert_mined_parquet_to_clip_image_list(
             f"{train_pairs_file}"
         )
     return output_image_list_file
+
+
+def summarize_knn_mining(
+    mined_parquet: str,
+    target_parquet: str,
+    output_dir: str,
+    topn: int = 0,
+) -> str:
+    """Write mining_summary.txt and mining_summary.json after k-NN mining.
+
+    The ``tmm nearest_neighbors`` step already de-duplicates by filepath
+    before writing, so raw-vs-deduped counts reflect that:
+    raw_neighbor_rows is the pre-dedup estimate (target_queries * topn) and
+    unique_mined_filepaths is the actual parquet row count.
+
+    Args:
+        mined_parquet:  Path to the k-NN output parquet (filepath column).
+        target_parquet: Path to the target embeddings parquet used as k-NN queries.
+        output_dir:     Directory where mining_summary.txt and .json are written.
+        topn:           k-NN topn value; used to estimate raw_neighbor_rows.
+
+    Returns:
+        Path to the written mining_summary.txt.
+    """
+    import json
+    import os
+
+    import pandas as pd
+
+    def _counts(df, column, limit=12):
+        if df.empty or column not in df.columns:
+            return ["  (none)"]
+        counts = df[column].fillna("").astype(str).value_counts().head(limit)
+        if counts.empty:
+            return ["  (none)"]
+        return [f"  {str(v) or '(blank)'}: {int(c)}" for v, c in counts.items()]
+
+    os.makedirs(output_dir, exist_ok=True)
+
+    target_df = pd.read_parquet(target_parquet)
+    n_targets = len(target_df)
+
+    mined_df = pd.read_parquet(mined_parquet)
+    unique_mined_filepaths = len(mined_df)
+    # Distinguish "the mine step did not emit this column" from a real
+    # zero — the parquet carries only `filepath` unless the mine step is
+    # configured to pass the target linkage through.
+    _NA = "(not available: nearest_neighbors output has no such column)"
+    unique_mined_names = (
+        int(
+            mined_df["unique_name"]
+            .fillna("")
+            .astype(str)
+            .loc[lambda s: s.astype(bool)]
+            .drop_duplicates()
+            .shape[0]
+        )
+        if "unique_name" in mined_df.columns
+        else None
+    )
+
+    # The nearest_neighbors step de-dupes before writing,
+    # so estimate the raw pre-dedup row count from topn when available.
+    raw_neighbor_rows = (n_targets * int(topn)) if topn else None
+
+    summary_payload = {
+        "target_parquet": target_parquet,
+        "mined_parquet": mined_parquet,
+        "target_queries": n_targets,
+        "similar_items_per_query": int(topn) if topn else None,
+        "raw_neighbor_rows_estimate": raw_neighbor_rows,
+        "unique_mined_filepaths": unique_mined_filepaths,
+        "unique_mined_names": unique_mined_names,
+    }
+
+    summary_lines = [
+        "k-NN mining summary",
+        f"Target parquet: {target_parquet}",
+        f"Mined parquet: {mined_parquet}",
+        f"Target queries: {n_targets}",
+    ]
+    if topn:
+        summary_lines.append(f"Similar items per query: {topn}")
+        summary_lines.append(
+            f"Raw neighbor rows (estimate, pre-dedup): {raw_neighbor_rows}"
+        )
+    summary_lines += [
+        f"Unique mined filepaths (post-dedup): {unique_mined_filepaths}",
+        "Unique mined names (post-dedup): "
+        + (_NA if unique_mined_names is None else str(unique_mined_names)),
+        "",
+        "Target query rows by query type:",
+    ]
+    summary_lines.extend(_counts(target_df, "query_type"))
+    summary_lines.extend(["", "Target query rows by attribute:"])
+    summary_lines.extend(_counts(target_df, "weak_attribute"))
+    summary_lines.extend(["", "Mined rows by target query type:"])
+    summary_lines.extend(
+        _counts(mined_df, "target_query_type")
+        if "target_query_type" in mined_df.columns else [f"  {_NA}"]
+    )
+    summary_lines.extend(["", "Mined rows by target attribute:"])
+    summary_lines.extend(
+        _counts(mined_df, "target_attribute")
+        if "target_attribute" in mined_df.columns else [f"  {_NA}"]
+    )
+    summary_lines.append("")
+
+    summary_text = "\n".join(summary_lines)
+    txt_path = os.path.join(output_dir, "mining_summary.txt")
+    json_path = os.path.join(output_dir, "mining_summary.json")
+    with open(txt_path, "w", encoding="utf-8") as f:
+        f.write(summary_text)
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump(summary_payload, f, indent=2)
+    print(summary_text.strip())
+    return txt_path
+
+
+def track_cumulative_mined_unique_names(
+    mined_pairs_file: str,
+    base_experiment_path: str,
+    iter_num: int,
+    output_file: str,
+) -> str:
+    """Track the cumulative set of mined unique names across DEFT iterations.
+
+    Reads the current iteration's mined pairs file, extracts unique names, and
+    merges them with the previous iteration's cumulative set (when iter_num > 1)
+    to produce a deduplicated cumulative list.
+
+    Args:
+        mined_pairs_file:       Path to the current iteration's mined_pairs.json.
+        base_experiment_path:   Root directory for all experiment outputs.
+        iter_num:               Current DEFT iteration number (1-based).
+        output_file:            Path where the cumulative unique names JSON is written.
+
+    Returns:
+        Path to the written cumulative unique names JSON file.
+    """
+    import os
+
+    import pandas as pd
+
+    curr_pairs = pd.read_json(mined_pairs_file)
+    curr_unique_names = (
+        curr_pairs[["unique_name"]]
+        if "unique_name" in curr_pairs.columns
+        else pd.DataFrame(columns=["unique_name"])
+    )
+
+    if iter_num > 1:
+        prev_cumulative_file = os.path.join(
+            base_experiment_path,
+            f"iter_{iter_num - 1}",
+            "mining",
+            "cumulative_mined_unique_names.json",
+        )
+        if os.path.isfile(prev_cumulative_file):
+            prev_cumulative = pd.read_json(prev_cumulative_file)
+            cumulative = (
+                pd.concat([prev_cumulative, curr_unique_names])
+                .drop_duplicates()
+                .reset_index(drop=True)
+            )
+        else:
+            cumulative = curr_unique_names
+    else:
+        cumulative = curr_unique_names
+
+    output_dir = os.path.dirname(output_file)
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
+    cumulative.to_json(output_file, orient="records")
+    print(
+        f"Cumulative mined unique names: iter={iter_num}, "
+        f"this_iter={len(curr_unique_names)}, "
+        f"cumulative={len(cumulative)}, output={output_file}"
+    )
+    return output_file
+
+
+def write_iteration_summary(
+    experiment_dir: str,
+    iter_num: int,
+    gaps_parquet: str,
+    mined_parquet: str,
+    mined_pairs_file: str,
+    training_checkpoint: str,
+    next_checkpoint_path: str,
+    experiment_id: str = "",
+) -> str:
+    """Write iteration_summary.json at the end of a DEFT iteration.
+
+    Captures the key artifact paths and checkpoint state for each iteration.
+
+    Args:
+        experiment_dir:       Directory for this iteration's outputs.
+        iter_num:             Current DEFT iteration number (1-based).
+        gaps_parquet:         Path to the gap-analysis output parquet.
+        mined_parquet:        Path to the raw k-NN mined parquet.
+        mined_pairs_file:     Path to the final mined pairs JSON.
+        training_checkpoint:  Checkpoint used as input for this iteration's training.
+        next_checkpoint_path: Expected path of the best checkpoint produced by training.
+        experiment_id:        Optional unique ID for this experiment run.
+
+    Returns:
+        Path to the written iteration_summary.json.
+    """
+    import json
+    import os
+
+    os.makedirs(experiment_dir, exist_ok=True)
+    payload = {
+        "iteration": int(iter_num),
+        "experiment_id": experiment_id,
+        "experiment_dir": experiment_dir,
+        "training_checkpoint": training_checkpoint,
+        "next_checkpoint_path": next_checkpoint_path,
+        "gaps_parquet": gaps_parquet,
+        "mined_parquet": mined_parquet,
+        "mined_pairs_file": mined_pairs_file,
+        "eval_results_dir": experiment_dir,
+    }
+    out_path = os.path.join(experiment_dir, "iteration_summary.json")
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2)
+    print(f"Iteration {iter_num} summary written to {out_path}")
+    return out_path

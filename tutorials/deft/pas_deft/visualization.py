@@ -399,13 +399,29 @@ body {{ font-family: Arial, sans-serif; margin: 20px; }}
 def prepare_prev_clip_data_for_embedding(
     prev_train_config_yaml: str,
     output_parquet_path: str,
+    host_path_map=None,
 ) -> str:
     """Collect prior CLIP training data into a filepaths parquet.
+
+    ``dataset.train.datasets`` in the prior train config is the authoritative
+    record of what the last iteration trained on — under ``continual_dataset``
+    it accumulates one entry per iteration, so walking it captures the whole
+    history without reconstructing it here.
+
+    That config is written for the TAO container, so its paths are
+    container-absolute (``/results/...``).  When this runs on the host instead
+    of inside the container, pass ``host_path_map`` to translate those prefixes
+    for reading.  Emitted ``filepath`` values keep the config's own roots, since
+    the parquet is consumed by the image-embedding container.
 
     Args:
         prev_train_config_yaml: Path to the CLIP train config YAML
                                 from the previous training step.
         output_parquet_path:    Where to write the union parquet.
+        host_path_map:          Container-prefix -> host-prefix mapping applied
+                                when opening ``image_list_file``, e.g.
+                                ``{"/results": "/abs/host/results"}``.  Omit
+                                when running inside the container.
 
     Returns:
         Path to ``output_parquet_path``.
@@ -415,41 +431,66 @@ def prepare_prev_clip_data_for_embedding(
     import pandas as pd
     import yaml
 
-    filepaths = []
+    path_map = sorted(
+        (host_path_map or {}).items(), key=lambda kv: len(kv[0]), reverse=True,
+    )
+
+    def _to_host(path):
+        """Rewrite a container path to its host equivalent, if mapped."""
+        for container_root, host_root in path_map:
+            if path == container_root or path.startswith(
+                container_root.rstrip("/") + "/"
+            ):
+                return os.path.join(
+                    host_root, os.path.relpath(path, container_root),
+                )
+        return path
+
+    entries = []
     if prev_train_config_yaml and os.path.isfile(prev_train_config_yaml):
         with open(prev_train_config_yaml, "r", encoding="utf-8") as f:
             config_data = yaml.safe_load(f) or {}
         dataset_cfg = config_data.get("dataset") or {}
         train_data_cfg = dataset_cfg.get("train") or {}
-        datasets = train_data_cfg.get("datasets") or []
-        if not datasets:
-            datasets = (config_data.get("train") or {}).get("datasets") or []
-        for idx, entry in enumerate(datasets):
-            image_dir = entry.get("image_dir", "")
-            image_list_file = entry.get("image_list_file", "")
-            if not image_dir or not image_list_file:
-                print(
-                    f"train.datasets[{idx}] missing image_dir or "
-                    "image_list_file; skipping"
-                )
-                continue
-            if not os.path.isfile(image_list_file):
-                print(
-                    f"image_list_file {image_list_file} from "
-                    f"train.datasets[{idx}] missing; skipping"
-                )
-                continue
-            with open(image_list_file, "r", encoding="utf-8") as lf:
-                for line in lf:
-                    name = line.strip()
-                    if name:
-                        filepaths.append(
-                            os.path.abspath(os.path.join(image_dir, name)),
-                        )
+        entries = train_data_cfg.get("datasets") or []
+        if not entries:
+            entries = (config_data.get("train") or {}).get("datasets") or []
     else:
         print(
             f"No prior train config at {prev_train_config_yaml!r}; "
             "emitting empty previous-data parquet"
+        )
+
+    filepaths = []
+    for idx, entry in enumerate(entries):
+        entry_image_dir = entry.get("image_dir", "")
+        entry_image_list_file = entry.get("image_list_file", "")
+        if not entry_image_dir or not entry_image_list_file:
+            print(
+                f"train.datasets[{idx}] missing image_dir or "
+                "image_list_file; skipping"
+            )
+            continue
+        # Unfilled template entries carry "???" rather than a real path.
+        if "???" in (entry_image_dir, entry_image_list_file):
+            continue
+        host_image_list_file = _to_host(entry_image_list_file)
+        if not os.path.isfile(host_image_list_file):
+            print(
+                f"image_list_file {entry_image_list_file} from "
+                f"train.datasets[{idx}] missing "
+                f"(looked in {host_image_list_file}); skipping"
+            )
+            continue
+        before = len(filepaths)
+        with open(host_image_list_file, "r", encoding="utf-8") as lf:
+            for line in lf:
+                name = line.strip()
+                if name:
+                    filepaths.append(os.path.join(entry_image_dir, name))
+        print(
+            f"train.datasets[{idx}]: {len(filepaths) - before} images from "
+            f"{entry_image_list_file}"
         )
 
     filepaths = sorted(set(filepaths))

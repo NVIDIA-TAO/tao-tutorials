@@ -10,6 +10,20 @@ def _bool_str(value) -> str:
     return "true" if str(value).strip().lower() in ("true", "1", "yes", "y") else "false"
 
 
+def _abs_data_path(value: str) -> str:
+    """Absolutize a PAS data path, leaving blanks and absolute paths untouched.
+
+    These values are handed to both host-side code (which reads the files) and
+    the TAO container specs (which read them again through a bind mount), so a
+    single string has to be valid on both sides. The notebook mounts the data
+    root at its own host path to make that true, which only holds if the path
+    is absolute — a relative ``data/...`` resolves against the container's
+    working directory (``/opt/nvidia``) and silently finds nothing.
+    """
+    value = str(value or "")
+    return os.path.abspath(value) if value else value
+
+
 class PasDeftConfig:
     """All parsed parameters for a PAS CLIP DEFT experiment.
 
@@ -24,6 +38,11 @@ class PasDeftConfig:
     """
 
     CLIP_CKPT_RELPATH = "best/clip_best_val_t2i_mAP.pth"
+    # Model-only copy of the above with the LightningModule "model." prefix
+    # stripped, written by normalize_clip_pretrained_checkpoint. This is what
+    # carries into the next iteration's train.pretrained_model_path; the raw
+    # checkpoint above is what eval consumes.
+    CLIP_PRETRAINED_RELPATH = "pretrained/model_state.pth"
 
     def __init__(
         self,
@@ -112,17 +131,22 @@ class PasDeftConfig:
         self.pas_max_aug_pool_rows: int = int(_pas.get("max_aug_pool_rows", 0) or 0)
         self.pas_mining_pool_mode: str = _pas.get("mining_pool_mode", "real_and_augmented")
         self.pas_val_sample_size: int = int(_pas.get("val_sample_size", 512) or 512)
-        self.pas_train_pairs_source_file: str = _pas.get("train_pairs_source_file", "")
-        self.pas_pool_pairs_source_file: str = _pas.get(
-            "pool_pairs_source_file", self.pas_train_pairs_source_file
+        self.pas_train_pairs_source_file: str = _abs_data_path(
+            _pas.get("train_pairs_source_file", "")
         )
-        self.pas_eval_pairs_source_file: str = _pas["eval_pairs_source_file"]
-        self.pas_train_image_dir: str = _pas["train_image_dir"]
-        self.pas_train_caption_dir: str = _pas["train_caption_dir"]
-        self.pas_source_image_dir: str = _pas["source_image_dir"]
-        self.pas_source_caption_dir: str = _pas["source_caption_dir"]
-        self.pas_eval_image_dir: str = _pas["eval_image_dir"]
-        self.pas_eval_caption_dir: str = _pas["eval_caption_dir"]
+        self.pas_pool_pairs_source_file: str = (
+            _abs_data_path(_pas.get("pool_pairs_source_file", ""))
+            or self.pas_train_pairs_source_file
+        )
+        self.pas_eval_pairs_source_file: str = _abs_data_path(
+            _pas["eval_pairs_source_file"]
+        )
+        self.pas_train_image_dir: str = _abs_data_path(_pas["train_image_dir"])
+        self.pas_train_caption_dir: str = _abs_data_path(_pas["train_caption_dir"])
+        self.pas_source_image_dir: str = _abs_data_path(_pas["source_image_dir"])
+        self.pas_source_caption_dir: str = _abs_data_path(_pas["source_caption_dir"])
+        self.pas_eval_image_dir: str = _abs_data_path(_pas["eval_image_dir"])
+        self.pas_eval_caption_dir: str = _abs_data_path(_pas["eval_caption_dir"])
 
         # ── Gap analysis ───────────────────────────────────────────────────
         _gap = _cfg.get("gap_analysis", {}) or {}
@@ -172,17 +196,28 @@ class PasDeftConfig:
     # ──────────────────────────────────────────────────────────────────────
 
     def training_checkpoint_for_iter(self, iter_num: int) -> str:
-        """Resolve the training checkpoint to use at the start of a DEFT iteration."""
+        """Resolve the training checkpoint to use at the start of a DEFT iteration.
+
+        Returns a *container* path (leading ``/``), since the value is written
+        into the TAO spec as ``train.pretrained_model_path``. The normalized model-only
+        checkpoint is used rather than the raw Lightning one. 
+        """
         if not self.continual_model:
             return self.init_checkpoint
         if iter_num == 1:
-            ckpt = f"{self.base_experiment_path}/sft/train/{self.CLIP_CKPT_RELPATH}"
+            host_ckpt = (
+                f"{self.base_experiment_path}/sft/{self.CLIP_PRETRAINED_RELPATH}"
+            )
             return (
-                ckpt
-                if (bool(self.pas_train_pairs_source_file) and os.path.exists(ckpt))
+                f"/{host_ckpt}"
+                if (bool(self.pas_train_pairs_source_file)
+                    and os.path.exists(host_ckpt))
                 else self.init_checkpoint
             )
-        return f"{self.base_experiment_path}/iter_{iter_num - 1}/train/{self.CLIP_CKPT_RELPATH}"
+        return (
+            f"/{self.base_experiment_path}/iter_{iter_num - 1}"
+            f"/{self.CLIP_PRETRAINED_RELPATH}"
+        )
 
     def __repr__(self) -> str:
         return (

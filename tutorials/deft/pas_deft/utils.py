@@ -19,6 +19,7 @@ def create_clip_train_config(
     val_image_list_file: str = "",
     val_image_dir: str = "",
     val_caption_dir: str = "",
+    continual_dataset: bool = False,
 ) -> str:
     """Create a TAO CLIP training config YAML by patching a source config.
 
@@ -43,6 +44,12 @@ def create_clip_train_config(
         val_image_list_file:    Explicit image list for ``dataset.val``.
         val_image_dir:          ``image_dir`` for the val dataset.
         val_caption_dir:        ``caption_dir`` for the val dataset.
+        continual_dataset:      Keep ``base_config_yaml``'s train datasets and
+                                append to them instead of replacing them. In a
+                                continual-dataset run the base config is the
+                                previous iteration's, and its per-iteration
+                                mined sets — disjoint by construction — must
+                                all stay in training.
 
     Returns:
         Path to the newly written config YAML.
@@ -72,6 +79,28 @@ def create_clip_train_config(
     train_data_cfg = dataset_cfg.setdefault("train", {})
     datasets = []
 
+    if continual_dataset:
+        for entry in train_data_cfg.get("datasets") or []:
+            if not isinstance(entry, dict):
+                continue
+            entry_image_list_file = entry.get("image_list_file")
+            # Unfilled template entries carry "???" or a null image list.
+            if not entry_image_list_file or entry_image_list_file == "???":
+                continue
+            datasets.append(dict(entry))
+        print(
+            f"Carried {len(datasets)} train dataset(s) forward from "
+            f"{base_config_yaml}"
+        )
+
+    def _add_dataset(entry):
+        """Append ``entry``, replacing any entry for the same image list."""
+        datasets[:] = [
+            existing for existing in datasets
+            if existing.get("image_list_file") != entry["image_list_file"]
+        ]
+        datasets.append(entry)
+
     if train_image_list_file:
         seed_entry = {
             "image_list_file": train_image_list_file,
@@ -83,7 +112,7 @@ def create_clip_train_config(
             seed_entry["caption_dir"] = train_caption_dir
         if train_pairs_file:
             seed_entry["train_pairs_file"] = train_pairs_file
-        datasets.append(seed_entry)
+        _add_dataset(seed_entry)
 
     if mined_image_list_file:
         mined_entry = {
@@ -94,7 +123,7 @@ def create_clip_train_config(
         }
         if mined_pairs_file:
             mined_entry["train_pairs_file"] = mined_pairs_file
-        datasets.append(mined_entry)
+        _add_dataset(mined_entry)
 
     train_data_cfg["datasets"] = datasets
 
@@ -464,12 +493,18 @@ def get_current_checkpoint(
             return None
         metric_step = best_metric.get("step")
         if metric_step is not None:
-            exact = [
-                item for item in candidates
-                if item["step"] is not None and item["step"] == metric_step
-            ]
-            if exact:
-                return exact[-1]
+            # Lightning writes validation metrics at a zero-based global step,
+            # while TAO checkpoint filenames use the completed one-based step.
+            # Keep exact matching first for status-derived metrics, then accept
+            # the TensorBoard ``metric_step + 1`` convention.
+            for checkpoint_step in (metric_step, metric_step + 1):
+                exact = [
+                    item for item in candidates
+                    if item["step"] is not None
+                    and item["step"] == checkpoint_step
+                ]
+                if exact:
+                    return exact[-1]
             before = [
                 item for item in candidates
                 if item["step"] is not None and item["step"] <= metric_step

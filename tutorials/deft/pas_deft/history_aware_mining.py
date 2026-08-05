@@ -1,6 +1,87 @@
 """Post-KNN history-aware selection for PAS CLIP DEFT mining."""
 
 
+def load_selection_history(history_file: str, iter_num: int) -> dict:
+    """Load and validate the mining selection ledger.
+
+    Returns the parsed state with every entry's ``selected_unique_names``
+    normalized. A ledger that does not exist yet — legal only at iteration 1 —
+    comes back with an empty ``iterations`` list and none of the
+    experiment-level invariants (``mode``, ``continual_dataset``,
+    ``replay_fraction``) set; :func:`select_history_aware_mined_pairs` stamps
+    those when it commits iteration 1.
+    """
+    import hashlib
+    import json
+    import os
+
+    iteration = int(iter_num)
+    if iteration < 1:
+        raise ValueError(f"iter_num must be >= 1, got {iteration}")
+
+    history_path = os.path.abspath(history_file)
+    if not os.path.isfile(history_path):
+        if iteration != 1:
+            raise FileNotFoundError(
+                f"Selection history is required before iteration {iteration}: "
+                f"{history_path}"
+            )
+        return {
+            "version": 1,
+            "identity": "unique_name",
+            "source_pool_image_list_file": "",
+            "source_pool_size": 0,
+            "iterations": [],
+        }
+
+    with open(history_path, "r", encoding="utf-8") as f:
+        state = json.load(f)
+    if not isinstance(state, dict) or state.get("version") != 1:
+        raise RuntimeError(f"Unsupported or malformed selection history: {history_path}")
+    if state.get("identity") != "unique_name":
+        raise RuntimeError("Selection history identity must be fixed to unique_name")
+
+    entries = state.get("iterations")
+    if not isinstance(entries, list):
+        raise RuntimeError("Selection history iterations must be a list")
+    iteration_numbers = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            raise RuntimeError("Every selection history iteration must be an object")
+        entry_iteration = int(entry.get("iteration", 0))
+        iteration_numbers.append(entry_iteration)
+        selected_names = entry.get("selected_unique_names")
+        if not isinstance(selected_names, list):
+            raise RuntimeError(
+                f"History iteration {entry_iteration} has no selected_unique_names list"
+            )
+        normalized_names = [
+            str(name or "").strip().replace("\\", "/") for name in selected_names
+        ]
+        if any(not name for name in normalized_names):
+            raise RuntimeError(
+                f"History iteration {entry_iteration} contains an empty unique_name"
+            )
+        if len(normalized_names) != len(set(normalized_names)):
+            raise RuntimeError(
+                f"History iteration {entry_iteration} contains duplicate unique_name values"
+            )
+        names_hash = hashlib.sha256(
+            "".join(f"{name}\n" for name in normalized_names).encode("utf-8")
+        ).hexdigest()
+        if names_hash != str(entry.get("image_list_sha256") or ""):
+            raise RuntimeError(
+                f"History iteration {entry_iteration} names do not match its image list"
+            )
+        entry["selected_unique_names"] = normalized_names
+    if iteration_numbers != list(range(1, len(entries) + 1)):
+        raise RuntimeError(
+            f"Selection history must contain contiguous iterations starting at 1; "
+            f"found {iteration_numbers}"
+        )
+    return state
+
+
 def select_history_aware_mined_pairs(
     candidate_pairs_file: str,
     candidate_manifest_file: str,
@@ -25,6 +106,13 @@ def select_history_aware_mined_pairs(
     therefore selects a controlled mixture of novel and replay pairs. Replay
     first follows the current KNN relevance order, then uses prior selected-pair
     files only when more replay rows are needed to reach the requested budget.
+
+    The candidate pool is expected to be uncapped — the caller runs the
+    conversion step with ``target_query_count=0`` into its own directory, so
+    that this function owns the budget and spends it after the novel/replay
+    partition. Given that, a non-zero ``selection_shortfall`` means KNN
+    genuinely ran out of novel neighbours, rather than that the budget was
+    spent upstream on rows discarded here.
     """
     import hashlib
     import json
@@ -170,30 +258,17 @@ def select_history_aware_mined_pairs(
     mode = "continual_novel_only" if continual else "controlled_replay"
 
     history_path = os.path.abspath(history_file)
-    if os.path.isfile(history_path):
-        with open(history_path, "r", encoding="utf-8") as f:
-            state = json.load(f)
-    else:
-        if iteration != 1:
-            raise FileNotFoundError(
-                f"Selection history is required before iteration {iteration}: "
-                f"{history_path}"
-            )
-        state = {
-            "version": 1,
-            "identity": "unique_name",
-            "mode": mode,
-            "continual_dataset": continual,
-            "replay_fraction": effective_replay_fraction,
-            "source_pool_image_list_file": "",
-            "source_pool_size": 0,
-            "iterations": [],
-        }
+    state = load_selection_history(history_file, iteration)
+    if not state["iterations"]:
+        # Fresh ledger — stamp the experiment-level invariants that every later
+        # iteration is then checked against. Keyed on there being no committed
+        # iterations rather than on "mode" being absent, so a persisted ledger
+        # that lost its mode key fails the check below instead of being
+        # silently re-stamped with whatever this run happens to request.
+        state["mode"] = mode
+        state["continual_dataset"] = continual
+        state["replay_fraction"] = effective_replay_fraction
 
-    if not isinstance(state, dict) or state.get("version") != 1:
-        raise RuntimeError(f"Unsupported or malformed selection history: {history_path}")
-    if state.get("identity") != "unique_name":
-        raise RuntimeError("Selection history identity must be fixed to unique_name")
     if state.get("mode") != mode or state.get("continual_dataset") is not continual:
         raise RuntimeError(
             "Cannot change continual_dataset/history-aware mode inside one experiment"
@@ -223,44 +298,9 @@ def select_history_aware_mined_pairs(
     state["source_pool_file_size_bytes"] = pool_stat.st_size
     state["source_pool_mtime_ns"] = pool_stat.st_mtime_ns
 
-    entries = state.get("iterations")
-    if not isinstance(entries, list):
-        raise RuntimeError("Selection history iterations must be a list")
-    iteration_numbers = []
-    for entry in entries:
-        if not isinstance(entry, dict):
-            raise RuntimeError("Every selection history iteration must be an object")
-        entry_iteration = int(entry.get("iteration", 0))
-        iteration_numbers.append(entry_iteration)
-        selected_names = entry.get("selected_unique_names")
-        if not isinstance(selected_names, list):
-            raise RuntimeError(
-                f"History iteration {entry_iteration} has no selected_unique_names list"
-            )
-        normalized_names = [
-            str(name or "").strip().replace("\\", "/") for name in selected_names
-        ]
-        if any(not name for name in normalized_names):
-            raise RuntimeError(
-                f"History iteration {entry_iteration} contains an empty unique_name"
-            )
-        if len(normalized_names) != len(set(normalized_names)):
-            raise RuntimeError(
-                f"History iteration {entry_iteration} contains duplicate unique_name values"
-            )
-        names_hash = hashlib.sha256(
-            "".join(f"{name}\n" for name in normalized_names).encode("utf-8")
-        ).hexdigest()
-        if names_hash != str(entry.get("image_list_sha256") or ""):
-            raise RuntimeError(
-                f"History iteration {entry_iteration} names do not match its image list"
-            )
-        entry["selected_unique_names"] = normalized_names
-    if iteration_numbers != list(range(1, len(entries) + 1)):
-        raise RuntimeError(
-            f"Selection history must contain contiguous iterations starting at 1; "
-            f"found {iteration_numbers}"
-        )
+    # Structure, per-entry normalization, and contiguity are validated by
+    # load_selection_history above.
+    entries = state["iterations"]
 
     committed_entry = next(
         (entry for entry in entries if int(entry["iteration"]) == iteration),
@@ -391,9 +431,13 @@ def select_history_aware_mined_pairs(
                     break
             return added
 
+        # Current-KNN historical rows are preferred, but the requested replay
+        # quota is filled from prior outputs before novel fallback is allowed.
         selected_replay = sum(1 for key in selected if key in historical_names)
         _take_history(max(0, requested_replay - selected_replay))
 
+        # If the historical pool is too small, fill the replay deficit with
+        # extra novel rows. If novel supply is short, allow replay overflow.
         remaining = target - len(selected)
         if remaining > 0:
             _take(novel_candidates, remaining)
