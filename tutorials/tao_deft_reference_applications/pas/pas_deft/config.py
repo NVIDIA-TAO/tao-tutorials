@@ -64,6 +64,16 @@ class PasDeftConfig:
         self.train_config: str = _exp["train_config"]
         self.eval_config: str = _exp["eval_config"]
 
+        if os.path.isabs(self.base_experiment_path):
+            raise ValueError(
+                f"experiment.results_path must be relative to the notebook's "
+                f"working directory, got {self.base_experiment_path!r}. The "
+                f"container reads it at /{os.path.basename(self.base_experiment_path)}, "
+                f"which the notebook mounts as "
+                f"-v $PWD/{os.path.basename(self.base_experiment_path)}:"
+                f"/{os.path.basename(self.base_experiment_path)}."
+            )
+
         self.tao_pytorch_root: str = _exp.get("tao_pytorch_root", "")
         if not self.tao_pytorch_root:
             for _p in (self.train_config, self.eval_config):
@@ -72,8 +82,21 @@ class PasDeftConfig:
                     self.tao_pytorch_root = _p.split(_marker, 1)[0]
                     break
 
-        self.visualize: bool = bool(_exp.get("visualize", False))
-        self.visualize_embeddings: bool = bool(_exp.get("visualize_embeddings", False))
+        # ── Visualization (contact sheets / t-SNE) ─────────────────────────
+        _viz = _cfg.get("visualization", {}) or {}
+        self.visualize: bool = bool(
+            _viz.get("enabled", _exp.get("visualize", False))
+        )
+        self.visualize_embeddings: bool = bool(
+            _viz.get("embeddings", _exp.get("visualize_embeddings", False))
+        )
+        self.viz_max_samples_per_group: int = int(
+            _viz.get("max_samples_per_group", 12) or 12
+        )
+        self.viz_max_total_samples: int = int(
+            _viz.get("max_total_samples", 96) or 96
+        )
+        self.viz_tile_size: int = int(_viz.get("tile_size", 192) or 192)
 
         # ── Training ───────────────────────────────────────────────────────
         _train = _cfg["training"]
@@ -110,12 +133,6 @@ class PasDeftConfig:
         self.caption_expansion_count_expanded_pairs_toward_target: str = str(
             _cap_exp.get("count_expanded_pairs_toward_target", "auto")
         ).lower()
-
-        # ── Visualization (contact sheets / t-SNE) ─────────────────────────
-        _viz = _cfg.get("lepton_e2e", {}) or {}
-        self.viz_max_samples_per_group: int = int(_viz.get("viz_max_samples_per_group", 12) or 12)
-        self.viz_max_total_samples: int = int(_viz.get("viz_max_total_samples", 96) or 96)
-        self.viz_tile_size: int = int(_viz.get("viz_tile_size", 192) or 192)
 
         # ── PAS ────────────────────────────────────────────────────────────
         _pas = _cfg["pas"]
@@ -189,18 +206,25 @@ class PasDeftConfig:
         )
 
         # ── Misc ───────────────────────────────────────────────────────────
-        self.kratos_namespace: str = _cfg.get("kratos_namespace", "")
         self.iter_start: int = _cfg["iteration"]["start"]
         self.iter_end: int = _cfg["iteration"]["end"]
 
     # ──────────────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def container_path(host_path: str) -> str:
+        """Host-relative path → the path the TAO containers see."""
+        path = str(host_path or "")
+        if not path or os.path.isabs(path):
+            return path
+        return f"/{os.path.normpath(path)}"
 
     def training_checkpoint_for_iter(self, iter_num: int) -> str:
         """Resolve the training checkpoint to use at the start of a DEFT iteration.
 
         Returns a *container* path (leading ``/``), since the value is written
         into the TAO spec as ``train.pretrained_model_path``. The normalized model-only
-        checkpoint is used rather than the raw Lightning one. 
+        checkpoint is used rather than the raw Lightning one.
         """
         if not self.continual_model:
             return self.init_checkpoint
@@ -209,13 +233,13 @@ class PasDeftConfig:
                 f"{self.base_experiment_path}/sft/{self.CLIP_PRETRAINED_RELPATH}"
             )
             return (
-                f"/{host_ckpt}"
+                self.container_path(host_ckpt)
                 if (bool(self.pas_train_pairs_source_file)
                     and os.path.exists(host_ckpt))
                 else self.init_checkpoint
             )
-        return (
-            f"/{self.base_experiment_path}/iter_{iter_num - 1}"
+        return self.container_path(
+            f"{self.base_experiment_path}/iter_{iter_num - 1}"
             f"/{self.CLIP_PRETRAINED_RELPATH}"
         )
 

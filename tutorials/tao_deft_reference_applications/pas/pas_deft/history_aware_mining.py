@@ -120,6 +120,8 @@ def select_history_aware_mined_pairs(
     import os
     import tempfile
 
+    from pas_deft.pairs_io import iter_json_records
+
     def _truthy(value):
         return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
 
@@ -132,32 +134,6 @@ def select_history_aware_mined_pairs(
                 "Every history-aware candidate requires a non-empty unique_name"
             )
         return key
-
-    def _iter_json_records(path):
-        with open(path, "r", encoding="utf-8") as f:
-            first = f.readline()
-            second = f.readline()
-        line_delimited_array = (
-            first.strip() == "["
-            and second.lstrip().startswith("{")
-            and second.rstrip().rstrip(",").endswith("}")
-        )
-        if line_delimited_array:
-            with open(path, "r", encoding="utf-8") as f:
-                for line in f:
-                    value = line.strip()
-                    if not value or value in {"[", "]"}:
-                        continue
-                    if value.endswith(","):
-                        value = value[:-1]
-                    yield json.loads(value)
-            return
-        with open(path, "r", encoding="utf-8") as f:
-            rows = json.load(f)
-        if not isinstance(rows, list):
-            raise ValueError(f"Expected a JSON array in {path}")
-        for row in rows:
-            yield row
 
     def _sha256(path):
         digest = hashlib.sha256()
@@ -289,14 +265,19 @@ def select_history_aware_mined_pairs(
             "Cannot change source_pool_image_list_file inside one experiment"
         )
     recorded_pool_bytes = int(state.get("source_pool_file_size_bytes", 0) or 0)
-    recorded_pool_mtime = int(state.get("source_pool_mtime_ns", 0) or 0)
     if recorded_pool_bytes and recorded_pool_bytes != pool_stat.st_size:
         raise RuntimeError("Source pool image list size changed during the experiment")
-    if recorded_pool_mtime and recorded_pool_mtime != pool_stat.st_mtime_ns:
-        raise RuntimeError("Source pool image list mtime changed during the experiment")
+    pool_sha256 = _sha256(pool_path)
+    recorded_pool_sha256 = str(state.get("source_pool_sha256") or "")
+    if recorded_pool_sha256 and recorded_pool_sha256 != pool_sha256:
+        raise RuntimeError(
+            f"Source pool image list contents changed during the experiment: "
+            f"{pool_path}"
+        )
     state["source_pool_image_list_file"] = pool_path
     state["source_pool_file_size_bytes"] = pool_stat.st_size
-    state["source_pool_mtime_ns"] = pool_stat.st_mtime_ns
+    state["source_pool_sha256"] = pool_sha256
+    state.pop("source_pool_mtime_ns", None)
 
     # Structure, per-entry normalization, and contiguity are validated by
     # load_selection_history above.
@@ -336,7 +317,7 @@ def select_history_aware_mined_pairs(
     candidate_names = set()
     novel_candidates = []
     replay_candidates = []
-    for row in _iter_json_records(candidate_pairs_file):
+    for row in iter_json_records(candidate_pairs_file):
         candidate_raw_count += 1
         key = _pair_key(row)
         if key in candidate_names:
@@ -402,7 +383,7 @@ def select_history_aware_mined_pairs(
                     )
                 history_files_loaded += 1
                 entry_names = set(entry["selected_unique_names"])
-                for row in _iter_json_records(prior_pairs_file):
+                for row in iter_json_records(prior_pairs_file):
                     key = _pair_key(row)
                     if key not in entry_names:
                         raise RuntimeError(

@@ -1,7 +1,7 @@
 """CLIP DEFT pipeline utilities.
 
 Install with:
-    pip install /path/to/mdo-kratos-workflows/pas_deft/
+    pip install tutorials/tao_deft_reference_applications/pas/pas_deft/
 
 Then import e.g.:
     from pas_deft.config import PasDeftConfig

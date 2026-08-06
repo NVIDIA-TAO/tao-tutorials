@@ -49,8 +49,13 @@ def _register_safe_globals(torch_module):
         safe_globals.append(np_scalar)
 
         serialization.add_safe_globals(safe_globals)
-    except Exception:  # never break interpreter startup
-        pass
+    except Exception as exc:
+        print(
+            f"sitecustomize: safe-globals registration failed, "
+            f"torch.load(weights_only=True) may reject numpy scalars "
+            f"({type(exc).__name__}: {exc})",
+            file=sys.stderr,
+        )
 
 
 class _PostImportLoader(Loader):
@@ -80,7 +85,12 @@ class _TorchImportHook(MetaPathFinder):
         sys.meta_path.remove(self)
         try:
             spec = importlib.util.find_spec(fullname)
-        except Exception:
+        except Exception as exc:
+            print(
+                f"sitecustomize: could not resolve torch to patch it "
+                f"({type(exc).__name__}: {exc})",
+                file=sys.stderr,
+            )
             return None
         finally:
             sys.meta_path.insert(0, self)

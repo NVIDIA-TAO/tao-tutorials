@@ -8,8 +8,6 @@ def analyze_clip_inference_gaps(
     gaps_parquet: str,
     kpi_image_dir: str,
     logs_dir: str,
-    kpi_caption_dir: str = "",
-    caption_file_suffix: str = "",
     kpi_pairs_file: str = "",
     metric_name: str = "Rank-1",
     queries_per_slice: int = 200,
@@ -39,8 +37,6 @@ def analyze_clip_inference_gaps(
         gaps_parquet:        Output path for the weak-sample parquet.
         kpi_image_dir:       Root containing the KPI images.
         logs_dir:            Directory where the stub writes its summary.
-        kpi_caption_dir:     Root containing the KPI captions.
-        caption_file_suffix: Caption file suffix (e.g. ``.txt``).
         kpi_pairs_file:      TAO-FT ``test_pairs.json``.
         metric_name:         Metric used to choose weak attributes.
         queries_per_slice:   Max captions sampled per weak attribute.
@@ -63,7 +59,7 @@ def analyze_clip_inference_gaps(
 
     import pandas as pd
 
-    _ = (kpi_caption_dir, caption_file_suffix)
+    from pas_deft.pairs_io import iter_json_records, split_csv
 
     import glob
     import re
@@ -212,9 +208,6 @@ def analyze_clip_inference_gaps(
                 return name
         return raw
 
-    def _split_csv(value):
-        return {item.strip() for item in str(value or "").split(",") if item.strip()}
-
     def _infer_dataset(image_path):
         normalized = str(image_path or "").replace("\\", "/")
         parts = [p for p in normalized.split("/") if p]
@@ -224,29 +217,6 @@ def analyze_clip_inference_gaps(
                 if idx + 1 < len(parts):
                     return parts[idx + 1].strip()
         return parts[0].strip() if parts else ""
-
-    def _iter_json_records(path):
-        with open(path, "r", encoding="utf-8") as f:
-            first = f.readline()
-            second = f.readline()
-        compact = (
-            second.lstrip().startswith("{")
-            and second.rstrip().rstrip(",").endswith("}")
-        )
-        if compact:
-            with open(path, "r", encoding="utf-8") as f:
-                for line in f:
-                    s = line.strip()
-                    if not s or s in ("[", "]"):
-                        continue
-                    if s.endswith(","):
-                        s = s[:-1]
-                    if s:
-                        yield json.loads(s)
-            return
-        with open(path, "r", encoding="utf-8") as f:
-            for row in json.load(f):
-                yield row
 
     def _metrics_path(base_dir):
         candidates = [
@@ -302,7 +272,7 @@ def analyze_clip_inference_gaps(
     if not os.path.isfile(kpi_pairs_file):
         raise FileNotFoundError(f"kpi_pairs_file not found: {kpi_pairs_file}")
 
-    selection_qtype_filter = _split_csv(query_types)
+    selection_qtype_filter = split_csv(query_types)
     selection_qtype_label = ",".join(sorted(selection_qtype_filter)) if selection_qtype_filter else "all"
     metric_name = str(metric_name or "Rank-1")
     high_is_weak = metric_name.lower().startswith("zero@")
@@ -401,7 +371,7 @@ def analyze_clip_inference_gaps(
     selection_pair_rows = []
     selection_qtype_counts = Counter()
     skipped_pairs = 0
-    for row in _iter_json_records(kpi_pairs_file):
+    for row in iter_json_records(kpi_pairs_file):
         qtype = str(row.get("query_type") or "").strip()
         use_for_selection = (
             not selection_qtype_filter or qtype in selection_qtype_filter

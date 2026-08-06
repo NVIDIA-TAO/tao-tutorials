@@ -105,36 +105,12 @@ def export_clip_sample_contact_sheets(
     import base64
     import html
     import io
-    import json
     import os
     import textwrap
 
     import pandas as pd
 
-    def _iter_json_records(path):
-        if not path or not os.path.isfile(path):
-            return
-        with open(path, "r", encoding="utf-8") as f:
-            first = f.readline()
-            second = f.readline()
-        compact = (
-            second.lstrip().startswith("{")
-            and second.rstrip().rstrip(",").endswith("}")
-        )
-        if compact:
-            with open(path, "r", encoding="utf-8") as f:
-                for line in f:
-                    s = line.strip()
-                    if not s or s in ("[", "]"):
-                        continue
-                    if s.endswith(","):
-                        s = s[:-1]
-                    if s:
-                        yield json.loads(s)
-            return
-        with open(path, "r", encoding="utf-8") as f:
-            for row in json.load(f):
-                yield row
+    from pas_deft.pairs_io import iter_json_records
 
     def _sample(df):
         if df.empty:
@@ -148,43 +124,22 @@ def export_clip_sample_contact_sheets(
         out = pd.concat(pieces, ignore_index=True) if pieces else df.head(0)
         return out.head(max_total_samples).copy()
 
-    def _mount_aliases(path):
-        path = str(path or "")
-        aliases = [path]
-        if path.startswith("/data/"):
-            aliases.append(
-                os.path.join("/home/jovyan/lustre", path[len("/data/"):])
-            )
-        if path.startswith("/home/jovyan/lustre/"):
-            aliases.append(
-                os.path.join("/data", path[len("/home/jovyan/lustre/"):])
-            )
-        if path.startswith("/lustre/"):
-            aliases.append(os.path.join("/data", path[len("/lustre/"):]))
-            aliases.append(
-                os.path.join("/home/jovyan/lustre", path[len("/lustre/"):])
-            )
-        return aliases
-
     def _path_candidates(path, image_path="", unique_name=""):
         path = str(path or "")
         image_path = str(image_path or "")
         unique_name = str(unique_name or "")
-        raw_candidates = [path]
+        candidates = [path]
         if unique_name:
-            raw_candidates.append(os.path.join(os.path.dirname(path), unique_name))
+            candidates.append(os.path.join(os.path.dirname(path), unique_name))
         if image_path:
-            raw_candidates.append(image_path)
+            candidates.append(image_path)
             base_dir = os.path.dirname(path)
             dataset_root = os.path.dirname(base_dir)
-            raw_candidates.extend([
+            candidates.extend([
                 os.path.join(base_dir, image_path),
                 os.path.join(dataset_root, image_path),
                 os.path.join(dataset_root, "images", image_path),
             ])
-        candidates = []
-        for raw in raw_candidates:
-            candidates.extend(_mount_aliases(raw))
         seen = set()
         for candidate in candidates:
             if candidate and candidate not in seen:
@@ -201,9 +156,8 @@ def export_clip_sample_contact_sheets(
                     target = os.path.abspath(
                         os.path.join(os.path.dirname(candidate), target)
                     )
-                for alias in _mount_aliases(target):
-                    if os.path.isfile(alias):
-                        return alias
+                if os.path.isfile(target):
+                    return target
         return ""
 
     def _add_resolution_columns(df):
@@ -323,12 +277,15 @@ body {{ font-family: Arial, sans-serif; margin: 20px; }}
             caption = str(row.get("caption") or row.get("text") or os.path.basename(fp))
             wrapped = textwrap.wrap(f"{label} {caption}", width=34)[:5]
             draw.text((x + 6, y + tile_size + 6), "\n".join(wrapped), fill="black", font=font)
-        os.makedirs(os.path.dirname(path), exist_ok=True)
+        sheet_dir = os.path.dirname(path)
+        if sheet_dir:
+            os.makedirs(sheet_dir, exist_ok=True)
         sheet.save(path)
         print(f"Saved {title} contact sheet to {path}")
         return True
 
-    os.makedirs(output_dir, exist_ok=True)
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
     weak = pd.read_parquet(weak_parquet)
     mined = pd.read_parquet(mined_parquet)
 
@@ -338,7 +295,7 @@ body {{ font-family: Arial, sans-serif; margin: 20px; }}
         mined = pd.DataFrame(columns=["filepath"])
 
     pair_by_name = {}
-    for row in _iter_json_records(source_pairs_file) or []:
+    for row in iter_json_records(source_pairs_file, missing_ok=True):
         name = str(row.get("unique_name") or "").strip()
         if name and name not in pair_by_name:
             pair_by_name[name] = row
@@ -525,7 +482,8 @@ def create_tsne_visualization(
         output_plot_path:         File path for the output PNG.
 
     Returns:
-        The path to the saved plot, or empty string if no data.
+        The path to the saved plot, or empty string when there is nothing to
+        plot — no embeddings at all, or fewer than the 3 t-SNE needs.
     """
     import glob
     import os
@@ -587,7 +545,14 @@ def create_tsne_visualization(
         return ""
 
     all_embs = np.concatenate(arrays, axis=0)
-    perplexity = min(30, max(1, len(all_embs) - 1))
+    if len(all_embs) < 3:
+        print(
+            f"Only {len(all_embs)} embedding(s) found — t-SNE needs at least 3 "
+            "— skipping plot"
+        )
+        return ""
+
+    perplexity = min(30, len(all_embs) - 1)
     coords = TSNE(
         n_components=2, random_state=42, perplexity=perplexity,
     ).fit_transform(all_embs)
@@ -646,7 +611,9 @@ def create_tsne_visualization(
     ax.set_ylabel("t-SNE 2")
     ax.grid(True, alpha=0.3)
 
-    os.makedirs(os.path.dirname(output_plot_path), exist_ok=True)
+    plot_dir = os.path.dirname(output_plot_path)
+    if plot_dir:
+        os.makedirs(plot_dir, exist_ok=True)
     fig.savefig(output_plot_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
 

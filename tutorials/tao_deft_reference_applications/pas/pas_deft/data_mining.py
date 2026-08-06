@@ -3,9 +3,6 @@
 - :func:`materialize_pas_eval_split` — materialize PAS eval image list and pairs file.
 - :func:`materialize_pas_training_split` — write real/non-excluded seed training rows.
 - :func:`materialize_pas_pool_split` — write mining pool rows.
-- :func:`convert_vcn_csv_to_parquet` — VCN CSV → per-image parquet with absolute filepaths.
-- :func:`convert_mined_parquet_to_csv` — reverse mined filepaths back to VCN training CSV rows.
-- :func:`merge_train_csvs` — merge augmentation CSVs with the base training set.
 - :func:`convert_clip_image_list_to_parquet` — CLIP image list → embedding parquet.
 - :func:`convert_mined_parquet_to_clip_image_list` — mined parquet → CLIP image-list + pairs.
 - :func:`summarize_knn_mining` — post-k-NN mining summary (txt + json).
@@ -38,55 +35,12 @@ def materialize_pas_eval_split(
     import os
     import random
 
-    def _split_csv(value):
-        return {item.strip() for item in str(value or "").split(",") if item.strip()}
-
-    def _infer_dataset(image_path):
-        normalized = str(image_path or "").replace("\\", "/")
-        parts = [p for p in normalized.split("/") if p]
-        for marker in ("images", "data"):
-            if marker in parts:
-                idx = parts.index(marker)
-                if idx + 1 < len(parts):
-                    return parts[idx + 1].strip()
-        return parts[0].strip() if len(parts) > 1 else ""
-
-    def _normalize_row(row):
-        unique_name = str(row.get("unique_name") or "").strip()
-        caption = str(row.get("caption") or "").strip()
-        image_path = str(row.get("image_path") or "").strip()
-        dataset = str(row.get("dataset") or "").strip() or _infer_dataset(image_path)
-        if not unique_name or not caption or not dataset:
-            return None
-        out_row = dict(row)
-        out_row["dataset"] = dataset
-        out_row["query_type"] = str(row.get("query_type") or "").strip()
-        out_row["caption"] = caption
-        out_row["unique_name"] = unique_name
-        return out_row
-
-    def _iter_json_records(path):
-        with open(path, "r", encoding="utf-8") as f:
-            first = f.readline()
-            second = f.readline()
-        compact = (
-            second.lstrip().startswith("{")
-            and second.rstrip().rstrip(",").endswith("}")
-        )
-        if compact:
-            with open(path, "r", encoding="utf-8") as f:
-                for line in f:
-                    s = line.strip()
-                    if not s or s in ("[", "]"):
-                        continue
-                    if s.endswith(","):
-                        s = s[:-1]
-                    if s:
-                        yield json.loads(s)
-            return
-        with open(path, "r", encoding="utf-8") as f:
-            for row in json.load(f):
-                yield row
+    from pas_deft.pairs_io import (
+        discard_partial_outputs,
+        iter_json_records,
+        normalize_row,
+        split_csv,
+    )
 
     required = [p for p in (eval_image_list_file, eval_pairs_file, val_image_list_file) if p]
     if required and all(os.path.isfile(p) for p in required):
@@ -98,7 +52,7 @@ def materialize_pas_eval_split(
     if not os.path.isfile(eval_pairs_source_file):
         raise FileNotFoundError(f"PAS eval pairs file not found: {eval_pairs_source_file}")
 
-    qtypes = _split_csv(query_types)
+    qtypes = split_csv(query_types)
     for path in required:
         parent = os.path.dirname(path)
         if parent:
@@ -114,12 +68,12 @@ def materialize_pas_eval_split(
         if eval_pairs_file:
             pairs_handle = open(eval_pairs_file, "w", encoding="utf-8")
             pairs_handle.write("[\n")
-        for row in _iter_json_records(eval_pairs_source_file):
+        for row in iter_json_records(eval_pairs_source_file):
             query_type = str(row.get("query_type") or "").strip()
             if qtypes and query_type not in qtypes:
                 eval_skipped += 1
                 continue
-            out_row = _normalize_row(row)
+            out_row = normalize_row(row)
             if out_row is None:
                 eval_skipped += 1
                 continue
@@ -133,25 +87,31 @@ def materialize_pas_eval_split(
                 pairs_handle.write(json.dumps(out_row, ensure_ascii=False))
                 first = False
             eval_rows += 1
-    finally:
+
         if pairs_handle:
             pairs_handle.write("\n]\n")
             pairs_handle.close()
 
-    if eval_image_list_file:
-        with open(eval_image_list_file, "w", encoding="utf-8") as f:
-            for name in eval_images:
-                f.write(f"{name}\n")
+        if eval_image_list_file:
+            with open(eval_image_list_file, "w", encoding="utf-8") as f:
+                for name in eval_images:
+                    f.write(f"{name}\n")
 
-    if val_image_list_file and val_sample_size > 0 and eval_images:
-        rng = random.Random(42)
-        sample = rng.sample(eval_images, min(val_sample_size, len(eval_images)))
-        val_parent = os.path.dirname(val_image_list_file)
-        if val_parent:
-            os.makedirs(val_parent, exist_ok=True)
-        with open(val_image_list_file, "w", encoding="utf-8") as f:
-            for name in sample:
-                f.write(f"{name}\n")
+        if val_image_list_file and val_sample_size > 0 and eval_images:
+            rng = random.Random(42)
+            sample = rng.sample(eval_images, min(val_sample_size, len(eval_images)))
+            val_parent = os.path.dirname(val_image_list_file)
+            if val_parent:
+                os.makedirs(val_parent, exist_ok=True)
+            with open(val_image_list_file, "w", encoding="utf-8") as f:
+                for name in sample:
+                    f.write(f"{name}\n")
+    except BaseException:
+        discard_partial_outputs(pairs_handle, paths=required)
+        raise
+    finally:
+        if pairs_handle:
+            pairs_handle.close()
 
     print(
         f"PAS eval split: {eval_rows} rows / {len(eval_images)} images "
@@ -185,55 +145,12 @@ def materialize_pas_training_split(
     import json
     import os
 
-    def _split_csv(value):
-        return {item.strip() for item in str(value or "").split(",") if item.strip()}
-
-    def _infer_dataset(image_path):
-        normalized = str(image_path or "").replace("\\", "/")
-        parts = [p for p in normalized.split("/") if p]
-        for marker in ("images", "data"):
-            if marker in parts:
-                idx = parts.index(marker)
-                if idx + 1 < len(parts):
-                    return parts[idx + 1].strip()
-        return parts[0].strip() if len(parts) > 1 else ""
-
-    def _normalize_row(row):
-        unique_name = str(row.get("unique_name") or "").strip()
-        caption = str(row.get("caption") or "").strip()
-        image_path = str(row.get("image_path") or "").strip()
-        dataset = str(row.get("dataset") or "").strip() or _infer_dataset(image_path)
-        if not unique_name or not caption or not dataset:
-            return None
-        out_row = dict(row)
-        out_row["dataset"] = dataset
-        out_row["query_type"] = str(row.get("query_type") or "").strip()
-        out_row["caption"] = caption
-        out_row["unique_name"] = unique_name
-        return out_row
-
-    def _iter_json_records(path):
-        with open(path, "r", encoding="utf-8") as f:
-            first = f.readline()
-            second = f.readline()
-        compact = (
-            second.lstrip().startswith("{")
-            and second.rstrip().rstrip(",").endswith("}")
-        )
-        if compact:
-            with open(path, "r", encoding="utf-8") as f:
-                for line in f:
-                    s = line.strip()
-                    if not s or s in ("[", "]"):
-                        continue
-                    if s.endswith(","):
-                        s = s[:-1]
-                    if s:
-                        yield json.loads(s)
-            return
-        with open(path, "r", encoding="utf-8") as f:
-            for row in json.load(f):
-                yield row
+    from pas_deft.pairs_io import (
+        discard_partial_outputs,
+        iter_json_records,
+        normalize_row,
+        split_csv,
+    )
 
     required = [p for p in (seed_image_list_file, seed_pairs_file) if p]
     if required and all(os.path.isfile(p) for p in required):
@@ -252,8 +169,8 @@ def materialize_pas_training_split(
         if parent:
             os.makedirs(parent, exist_ok=True)
 
-    excluded = _split_csv(seed_exclude_datasets)
-    qtypes = _split_csv(query_types)
+    excluded = split_csv(seed_exclude_datasets)
+    qtypes = split_csv(query_types)
     max_seed_rows = int(max_seed_rows or 0)
 
     seed_count = 0
@@ -270,12 +187,12 @@ def materialize_pas_training_split(
             seed_pairs_handle = open(seed_pairs_file, "w", encoding="utf-8")
             seed_pairs_handle.write("[\n")
 
-        for row in _iter_json_records(train_pairs_source_file):
+        for row in iter_json_records(train_pairs_source_file):
             query_type = str(row.get("query_type") or "").strip()
             if qtypes and query_type not in qtypes:
                 skipped_query_type += 1
                 continue
-            out_row = _normalize_row(row)
+            out_row = normalize_row(row)
             if out_row is None:
                 skipped_unknown_dataset += 1
                 continue
@@ -309,9 +226,16 @@ def materialize_pas_training_split(
                         seed_list_handle.write(f"{unique_name}\n")
                     seed_count += 1
 
-    finally:
+    except BaseException:
+        discard_partial_outputs(
+            seed_pairs_handle, seed_list_handle, paths=required
+        )
+        raise
+    else:
         if seed_pairs_handle:
             seed_pairs_handle.write("\n]\n")
+    finally:
+        if seed_pairs_handle:
             seed_pairs_handle.close()
         if seed_list_handle:
             seed_list_handle.close()
@@ -351,55 +275,12 @@ def materialize_pas_pool_split(
     import json
     import os
 
-    def _split_csv(value):
-        return {item.strip() for item in str(value or "").split(",") if item.strip()}
-
-    def _infer_dataset(image_path):
-        normalized = str(image_path or "").replace("\\", "/")
-        parts = [p for p in normalized.split("/") if p]
-        for marker in ("images", "data"):
-            if marker in parts:
-                idx = parts.index(marker)
-                if idx + 1 < len(parts):
-                    return parts[idx + 1].strip()
-        return parts[0].strip() if len(parts) > 1 else ""
-
-    def _normalize_row(row):
-        unique_name = str(row.get("unique_name") or "").strip()
-        caption = str(row.get("caption") or "").strip()
-        image_path = str(row.get("image_path") or "").strip()
-        dataset = str(row.get("dataset") or "").strip() or _infer_dataset(image_path)
-        if not unique_name or not caption or not dataset:
-            return None
-        out_row = dict(row)
-        out_row["dataset"] = dataset
-        out_row["query_type"] = str(row.get("query_type") or "").strip()
-        out_row["caption"] = caption
-        out_row["unique_name"] = unique_name
-        return out_row
-
-    def _iter_json_records(path):
-        with open(path, "r", encoding="utf-8") as f:
-            first = f.readline()
-            second = f.readline()
-        compact = (
-            second.lstrip().startswith("{")
-            and second.rstrip().rstrip(",").endswith("}")
-        )
-        if compact:
-            with open(path, "r", encoding="utf-8") as f:
-                for line in f:
-                    s = line.strip()
-                    if not s or s in ("[", "]"):
-                        continue
-                    if s.endswith(","):
-                        s = s[:-1]
-                    if s:
-                        yield json.loads(s)
-            return
-        with open(path, "r", encoding="utf-8") as f:
-            for row in json.load(f):
-                yield row
+    from pas_deft.pairs_io import (
+        discard_partial_outputs,
+        iter_json_records,
+        normalize_row,
+        split_csv,
+    )
 
     def _is_augmented_row(row, dataset):
         if "is_augmented" in row:
@@ -415,7 +296,7 @@ def materialize_pas_pool_split(
 
     def _mode_tokens(value):
         normalized = str(value or "").lower().replace("+", ",").replace(";", ",")
-        tokens = _split_csv(normalized)
+        tokens = split_csv(normalized)
         if "real_and_augmented" in tokens or "all" in tokens:
             tokens.update({"real", "augmented"})
         if "aug" in tokens:
@@ -439,7 +320,7 @@ def materialize_pas_pool_split(
         if parent:
             os.makedirs(parent, exist_ok=True)
 
-    qtypes = _split_csv(query_types)
+    qtypes = split_csv(query_types)
     max_aug_pool_rows = int(max_aug_pool_rows or 0)
     pool_modes = _mode_tokens(mining_pool_mode)
     include_real_pool = "real" in pool_modes
@@ -459,12 +340,12 @@ def materialize_pas_pool_split(
             pool_pairs_handle = open(aug_pool_pairs_file, "w", encoding="utf-8")
             pool_pairs_handle.write("[\n")
 
-        for row in _iter_json_records(pool_pairs_source_file):
+        for row in iter_json_records(pool_pairs_source_file):
             query_type = str(row.get("query_type") or "").strip()
             if qtypes and query_type not in qtypes:
                 skipped_query_type += 1
                 continue
-            out_row = _normalize_row(row)
+            out_row = normalize_row(row)
             if out_row is None:
                 skipped_unknown_dataset += 1
                 continue
@@ -484,9 +365,16 @@ def materialize_pas_pool_split(
                         pool_list_handle.write(f"{unique_name}\n")
                     pool_count += 1
 
-    finally:
+    except BaseException:
+        discard_partial_outputs(
+            pool_pairs_handle, pool_list_handle, paths=required
+        )
+        raise
+    else:
         if pool_pairs_handle:
             pool_pairs_handle.write("\n]\n")
+    finally:
+        if pool_pairs_handle:
             pool_pairs_handle.close()
         if pool_list_handle:
             pool_list_handle.close()
@@ -514,50 +402,22 @@ def convert_clip_image_list_to_parquet(
         output_parquet:      Path where the output parquet will be written.
         caption_dir:         Optional caption directory.
         caption_file_suffix: Caption file suffix (e.g. ``.txt``).
-        pairs_file:          Optional TAO-FT ``*_pairs.json``.
+        pairs_file:          Optional TAO-FT ``*_pairs.json``. Captions come
+                             from this file when given, and ``caption_dir`` is
+                             not read at all.
 
     Returns:
         Path to ``output_parquet``.
+
+    Raises:
+        FileNotFoundError: If captions were requested but not one image in the
+            list has a caption file.
     """
-    import json
     import os
 
     import pandas as pd
 
-    def _infer_dataset(image_path):
-        normalized = str(image_path or "").replace("\\", "/")
-        parts = [p for p in normalized.split("/") if p]
-        for marker in ("images", "data"):
-            if marker in parts:
-                idx = parts.index(marker)
-                if idx + 1 < len(parts):
-                    return parts[idx + 1].strip()
-        if len(parts) > 1:
-            return parts[0].strip()
-        return ""
-
-    def _iter_json_records(path):
-        with open(path, "r", encoding="utf-8") as f:
-            first = f.readline()
-            second = f.readline()
-        compact = (
-            second.lstrip().startswith("{")
-            and second.rstrip().rstrip(",").endswith("}")
-        )
-        if compact:
-            with open(path, "r", encoding="utf-8") as f:
-                for line in f:
-                    s = line.strip()
-                    if not s or s in ("[", "]"):
-                        continue
-                    if s.endswith(","):
-                        s = s[:-1]
-                    if s:
-                        yield json.loads(s)
-            return
-        with open(path, "r", encoding="utf-8") as f:
-            for row in json.load(f):
-                yield row
+    from pas_deft.pairs_io import infer_dataset, iter_json_records
 
     out_dir = os.path.dirname(output_parquet)
     if out_dir:
@@ -569,12 +429,12 @@ def convert_clip_image_list_to_parquet(
     if pairs_file:
         wanted = set(basenames)
         records = []
-        for row in _iter_json_records(pairs_file):
+        for row in iter_json_records(pairs_file):
             name = str(row.get("unique_name") or "").strip()
             if name not in wanted:
                 continue
             image_path = str(row.get("image_path") or "")
-            dataset = str(row.get("dataset") or "").strip() or _infer_dataset(image_path)
+            dataset = str(row.get("dataset") or "").strip() or infer_dataset(image_path)
             records.append({
                 "filepath": os.path.abspath(os.path.join(image_dir, name)),
                 "text": str(row.get("caption") or "").strip(),
@@ -593,6 +453,8 @@ def convert_clip_image_list_to_parquet(
 
     include_text = bool(caption_dir) and bool(caption_file_suffix)
     records = []
+    missing_count = 0
+    missing_examples = []
     for name in basenames:
         rec = {"filepath": os.path.abspath(os.path.join(image_dir, name))}
         if include_text:
@@ -600,16 +462,35 @@ def convert_clip_image_list_to_parquet(
             caption_path = os.path.join(
                 caption_dir, f"{stem}{caption_file_suffix}",
             )
+            if not os.path.isfile(caption_path):
+                missing_count += 1
+                if len(missing_examples) < 5:
+                    missing_examples.append(f"{name} -> {caption_path}")
+                continue
             with open(caption_path, "r", encoding="utf-8") as f:
                 rec["text"] = f.read().strip()
         records.append(rec)
+
+    if missing_count and not records:
+        raise FileNotFoundError(
+            f"No caption file was found for any of the {len(basenames)} images "
+            f"listed in {image_list_file}. Expected {missing_examples[0]}. "
+            f"Check caption_dir={caption_dir!r} and "
+            f"caption_file_suffix={caption_file_suffix!r}."
+        )
+    if missing_count:
+        print(
+            f"WARNING: skipped {missing_count} of {len(basenames)} images with "
+            f"no caption file under {caption_dir} "
+            f"(e.g. {'; '.join(missing_examples)})"
+        )
 
     columns = ["filepath", "text"] if include_text else ["filepath"]
     out_df = pd.DataFrame(records, columns=columns)
     out_df.to_parquet(output_parquet, index=False)
     print(
         f"Converted CLIP image_list_file to parquet: "
-        f"{len(basenames)} basenames -> {output_parquet}"
+        f"{len(records)} of {len(basenames)} basenames -> {output_parquet}"
     )
     return output_parquet
 
@@ -661,28 +542,7 @@ def convert_mined_parquet_to_clip_image_list(
     import numpy as np
     import pandas as pd
 
-    def _iter_json_records(path):
-        with open(path, "r", encoding="utf-8") as f:
-            first = f.readline()
-            second = f.readline()
-        compact = (
-            second.lstrip().startswith("{")
-            and second.rstrip().rstrip(",").endswith("}")
-        )
-        if compact:
-            with open(path, "r", encoding="utf-8") as f:
-                for line in f:
-                    s = line.strip()
-                    if not s or s in ("[", "]"):
-                        continue
-                    if s.endswith(","):
-                        s = s[:-1]
-                    if s:
-                        yield json.loads(s)
-            return
-        with open(path, "r", encoding="utf-8") as f:
-            for row in json.load(f):
-                yield row
+    from pas_deft.pairs_io import iter_json_records
 
     def _counter_records(counter):
         total = sum(counter.values())
@@ -734,6 +594,9 @@ def convert_mined_parquet_to_clip_image_list(
         return arr / norm
 
     def _load_embeddings_for_names(shards_dir, wanted_names):
+        """Collect normalized embeddings for ``wanted_names`` from the shards."""
+        import pyarrow.parquet as pq
+
         embeddings = {}
         if not shards_dir or not wanted_names:
             return embeddings, 0
@@ -748,21 +611,22 @@ def convert_mined_parquet_to_clip_image_list(
         wanted = set(wanted_names)
         rows_scanned = 0
         for shard_path in shard_paths:
-            df = pd.read_parquet(
-                shard_path,
+            parquet_file = pq.ParquetFile(shard_path, pre_buffer=False)
+            for batch in parquet_file.iter_batches(
                 columns=["unique_name", "embedding"],
-            )
-            rows_scanned += len(df)
-            if df.empty:
-                continue
-            names = df["unique_name"].fillna("").astype(str)
-            mask = names.isin(wanted)
-            if not mask.any():
-                continue
-            for name, embedding in zip(names[mask], df.loc[mask, "embedding"]):
-                normed = _dense_vector(embedding)
-                if normed is not None:
-                    embeddings[str(name)] = normed
+                batch_size=8192,
+                use_threads=False,
+            ):
+                rows_scanned += batch.num_rows
+                names = batch.column("unique_name").to_pylist()
+                embedding_column = batch.column("embedding")
+                for index, name in enumerate(names):
+                    key = str(name or "")
+                    if key not in wanted:
+                        continue
+                    normed = _dense_vector(embedding_column[index].as_py())
+                    if normed is not None:
+                        embeddings[key] = normed
         return embeddings, rows_scanned
 
     image_root = os.path.normpath(os.path.realpath(image_dir))
@@ -1008,7 +872,7 @@ def convert_mined_parquet_to_clip_image_list(
             stem, _ = os.path.splitext(output_image_list_file)
             output_pairs_file = f"{stem}_pairs.json"
         wanted = set(basenames)
-        for row in _iter_json_records(source_pairs_file):
+        for row in iter_json_records(source_pairs_file):
             source_pair_rows_scanned += 1
             name = _pair_name(row)
             if name in wanted:
@@ -1037,7 +901,7 @@ def convert_mined_parquet_to_clip_image_list(
             seen_caption_keys = set()
             deduped_caption_rows = 0
             expansion_pair_rows_scanned = 0
-            for row in _iter_json_records(source_pairs_file):
+            for row in iter_json_records(source_pairs_file):
                 expansion_pair_rows_scanned += 1
                 image_path = _pair_image_path(row)
                 if image_path not in wanted_image_paths:
@@ -1117,6 +981,9 @@ def convert_mined_parquet_to_clip_image_list(
                     (row, score) for score, _, row in ranked
                 ]
 
+            candidate_pairs_after_dedup = sum(
+                len(rows) for rows in rows_by_image_path.values()
+            )
             caption_expansion_stats.update({
                 "source_pair_rows_scanned_for_expansion": int(
                     expansion_pair_rows_scanned
@@ -1126,12 +993,10 @@ def convert_mined_parquet_to_clip_image_list(
                 ),
                 "candidate_image_paths": int(len(wanted_image_paths)),
                 "candidate_pair_rows": int(
-                    sum(len(rows) for rows in rows_by_image_path.values())
+                    candidate_pairs_after_dedup + deduped_caption_rows
                 ),
                 "candidate_pair_names": int(len(candidate_names)),
-                "candidate_pairs_after_dedup": int(
-                    sum(len(rows) for rows in rows_by_image_path.values())
-                ),
+                "candidate_pairs_after_dedup": int(candidate_pairs_after_dedup),
                 "missing_anchor_embeddings": int(missing_anchor_embeddings),
                 "missing_candidate_embeddings": int(missing_candidate_embeddings),
                 "deduped_caption_rows": int(deduped_caption_rows),
@@ -1604,10 +1469,31 @@ def track_cumulative_mined_unique_names(
 
     Returns:
         Path to the written cumulative unique names JSON file.
+
+    Raises:
+        FileNotFoundError: If ``iter_num > 1`` and the previous iteration's
+            cumulative file is missing.
+        ValueError: If that file exists but carries no ``unique_name`` column.
     """
     import os
 
     import pandas as pd
+
+    def _previous_output_file():
+        """Where the previous iteration wrote this same file."""
+        absolute = os.path.abspath(output_file)
+        parts = absolute.split(os.sep)
+        current = f"iter_{iter_num}"
+        for idx in range(len(parts) - 1, -1, -1):
+            if parts[idx] == current:
+                parts[idx] = f"iter_{iter_num - 1}"
+                return os.sep.join(parts)
+        return os.path.join(
+            base_experiment_path,
+            f"iter_{iter_num - 1}",
+            "mining",
+            os.path.basename(absolute),
+        )
 
     curr_pairs = pd.read_json(mined_pairs_file)
     curr_unique_names = (
@@ -1616,22 +1502,29 @@ def track_cumulative_mined_unique_names(
         else pd.DataFrame(columns=["unique_name"])
     )
 
+    prev_cumulative_file = ""
     if iter_num > 1:
-        prev_cumulative_file = os.path.join(
-            base_experiment_path,
-            f"iter_{iter_num - 1}",
-            "mining",
-            "cumulative_mined_unique_names.json",
-        )
-        if os.path.isfile(prev_cumulative_file):
-            prev_cumulative = pd.read_json(prev_cumulative_file)
-            cumulative = (
-                pd.concat([prev_cumulative, curr_unique_names])
-                .drop_duplicates()
-                .reset_index(drop=True)
+        prev_cumulative_file = _previous_output_file()
+        if not os.path.isfile(prev_cumulative_file):
+            raise FileNotFoundError(
+                f"Cumulative mined names from iteration {iter_num - 1} are "
+                f"required before iteration {iter_num}: {prev_cumulative_file}. "
+                f"Continuing would restart the cumulative total from this "
+                f"iteration and undercount it for the rest of the experiment. "
+                f"Restore that file, or point output_file at the layout the "
+                f"earlier iterations actually used."
             )
-        else:
-            cumulative = curr_unique_names
+        prev_cumulative = pd.read_json(prev_cumulative_file)
+        if not prev_cumulative.empty and "unique_name" not in prev_cumulative.columns:
+            raise ValueError(
+                f"Previous cumulative file has no 'unique_name' column: "
+                f"{prev_cumulative_file}"
+            )
+        cumulative = (
+            pd.concat([prev_cumulative, curr_unique_names])
+            .drop_duplicates()
+            .reset_index(drop=True)
+        )
     else:
         cumulative = curr_unique_names
 
@@ -1643,6 +1536,7 @@ def track_cumulative_mined_unique_names(
         f"Cumulative mined unique names: iter={iter_num}, "
         f"this_iter={len(curr_unique_names)}, "
         f"cumulative={len(cumulative)}, output={output_file}"
+        + (f", merged_from={prev_cumulative_file}" if prev_cumulative_file else "")
     )
     return output_file
 

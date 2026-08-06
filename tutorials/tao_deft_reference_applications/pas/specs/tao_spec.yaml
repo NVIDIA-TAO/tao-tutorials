@@ -27,7 +27,6 @@ train:
     eps: 1.0e-6
     warmup_steps: 5
     scheduler: "cosine"
-  validation_interval: 1  # Run validation every N epochs
   val_check_interval: null  # Or run validation every N steps (takes precedence if set)
   # validate_before_training: false  # run full validation before the first training step
   # profiler: none  # none, simple, advanced, or pytorch
