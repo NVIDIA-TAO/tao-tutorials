@@ -1,0 +1,199 @@
+{
+  "metadata_version": 1,
+  "attributes": [
+    "top outer color",
+    "top outer type",
+    "bottom color",
+    "bottom type",
+    "shoe color",
+    "shoe type",
+    "viewpoint"
+  ],
+  "value_to_id": {
+    "top outer color": {
+      "__missing__": 0,
+      "beige": 1,
+      "black": 2,
+      "blue": 3,
+      "brown": 4,
+      "camouflage": 5,
+      "green": 6,
+      "grey": 7,
+      "not visible": 8,
+      "orange": 9,
+      "pink": 10,
+      "purple": 11,
+      "red": 12,
+      "white": 13,
+      "yellow": 14
+    },
+    "top outer type": {
+      "__missing__": 0,
+      "camisole": 1,
+      "cropped jacket": 2,
+      "hoodie": 3,
+      "knee length coat": 4,
+      "not visible": 5,
+      "robe": 6,
+      "shirt": 7,
+      "sweater": 8,
+      "t shirt": 9,
+      "vest": 10
+    },
+    "bottom color": {
+      "__missing__": 0,
+      "beige": 1,
+      "black": 2,
+      "blue": 3,
+      "brown": 4,
+      "camouflage": 5,
+      "green": 6,
+      "grey": 7,
+      "not visible": 8,
+      "orange": 9,
+      "pink": 10,
+      "purple": 11,
+      "red": 12,
+      "white": 13,
+      "yellow": 14
+    },
+    "bottom type": {
+      "__missing__": 0,
+      "dress": 1,
+      "jeans": 2,
+      "leggings": 3,
+      "not visible": 4,
+      "pants": 5,
+      "shorts": 6,
+      "skirt": 7
+    },
+    "shoe color": {
+      "__missing__": 0,
+      "beige": 1,
+      "black": 2,
+      "blue": 3,
+      "brown": 4,
+      "green": 5,
+      "grey": 6,
+      "none": 7,
+      "not visible": 8,
+      "orange": 9,
+      "pink": 10,
+      "purple": 11,
+      "red": 12,
+      "white": 13,
+      "yellow": 14
+    },
+    "shoe type": {
+      "__missing__": 0,
+      "barefoot": 1,
+      "boots": 2,
+      "flip flops": 3,
+      "high heels": 4,
+      "not visible": 5,
+      "sandals": 6,
+      "sneakers": 7
+    },
+    "viewpoint": {
+      "__missing__": 0,
+      "back view": 1,
+      "front view": 2,
+      "side view": 3
+    }
+  },
+  "id_to_value": {
+    "top outer color": [
+      "__missing__",
+      "beige",
+      "black",
+      "blue",
+      "brown",
+      "camouflage",
+      "green",
+      "grey",
+      "not visible",
+      "orange",
+      "pink",
+      "purple",
+      "red",
+      "white",
+      "yellow"
+    ],
+    "top outer type": [
+      "__missing__",
+      "camisole",
+      "cropped jacket",
+      "hoodie",
+      "knee length coat",
+      "not visible",
+      "robe",
+      "shirt",
+      "sweater",
+      "t shirt",
+      "vest"
+    ],
+    "bottom color": [
+      "__missing__",
+      "beige",
+      "black",
+      "blue",
+      "brown",
+      "camouflage",
+      "green",
+      "grey",
+      "not visible",
+      "orange",
+      "pink",
+      "purple",
+      "red",
+      "white",
+      "yellow"
+    ],
+    "bottom type": [
+      "__missing__",
+      "dress",
+      "jeans",
+      "leggings",
+      "not visible",
+      "pants",
+      "shorts",
+      "skirt"
+    ],
+    "shoe color": [
+      "__missing__",
+      "beige",
+      "black",
+      "blue",
+      "brown",
+      "green",
+      "grey",
+      "none",
+      "not visible",
+      "orange",
+      "pink",
+      "purple",
+      "red",
+      "white",
+      "yellow"
+    ],
+    "shoe type": [
+      "__missing__",
+      "barefoot",
+      "boots",
+      "flip flops",
+      "high heels",
+      "not visible",
+      "sandals",
+      "sneakers"
+    ],
+    "viewpoint": [
+      "__missing__",
+      "back view",
+      "front view",
+      "side view"
+    ]
+  },
+  "notes": {
+    "excluded_accessories": "Accessories are intentionally excluded from scalar metadata because they are multi-valued and subset-based."
+  }
+}

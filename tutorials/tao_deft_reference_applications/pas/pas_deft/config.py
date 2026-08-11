@@ -205,6 +205,25 @@ class PasDeftConfig:
             _cap_div.get("replay_fraction_when_noncontinual", 0.25) or 0.0
         )
 
+        # ── SDG (Synthetic Data Generation) ───────────────────────────────
+        _sdg = _cfg.get("sdg") or {}
+        self.sdg_enabled: bool = bool(
+            str(_sdg.get("enabled", False)).strip().lower() in ("true", "1", "yes", "y")
+        )
+        self.sdg_schema_path: str = str(_sdg.get("schema_path") or "")
+        self.sdg_payload_template_path: str = str(_sdg.get("payload_template_path") or "")
+        self.sdg_s3_root: str = str(_sdg.get("s3_root") or "")
+        self.sdg_scale_factor: float = float(_sdg.get("scale_factor", 1.0) or 1.0)
+        self.sdg_max_budget: int = int(_sdg.get("max_budget", -1))
+        self.sdg_attr_vocab_path: str = _abs_data_path(
+            _sdg.get("attr_vocab_path") or ""
+        )
+        self.sdg_airflow_url: str = str(_sdg.get("airflow_url") or "")
+        self.sdg_dag_id: str = str(_sdg.get("dag_id") or "")
+        self.sdg_airflow_username: str = str(_sdg.get("airflow_username") or "")
+        self.sdg_airflow_password: str = str(_sdg.get("airflow_password") or "")
+        self.sdg_poll_interval: int = int(_sdg.get("poll_interval", 30))
+
         # ── Misc ───────────────────────────────────────────────────────────
         self.iter_start: int = _cfg["iteration"]["start"]
         self.iter_end: int = _cfg["iteration"]["end"]

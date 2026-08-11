@@ -1541,6 +1541,80 @@ def track_cumulative_mined_unique_names(
     return output_file
 
 
+def write_delta_mined_pairs(
+    mined_pairs_file: str,
+    base_experiment_path: str,
+    iter_num: int,
+    output_file: str,
+) -> str:
+    """Write the mined pairs that are new as of this DEFT iteration.
+
+    SDG augments only what mining surfaced *this* round. Names carried over
+    from earlier iterations are already represented in the training set, so
+    re-augmenting them would spend the generation budget reproducing images the
+    model has already seen.
+
+    The previous iteration's cumulative unique-names file
+    (:func:`track_cumulative_mined_unique_names`) is the authoritative record of
+    what came before, so this diffs against it rather than recomputing the
+    history. Iteration 1 has no predecessor and its delta is the full mined set.
+
+    Args:
+        mined_pairs_file:     Path to this iteration's mined_pairs.json.
+        base_experiment_path: Root directory for all experiment outputs.
+        iter_num:             Current DEFT iteration number (1-based).
+        output_file:          Path where the delta pairs JSON is written.
+
+    Returns:
+        Path to the written delta pairs JSON file.
+    """
+    import json
+    import os
+
+    with open(mined_pairs_file, "r", encoding="utf-8") as f:
+        current_pairs = json.load(f)
+
+    previous_names = set()
+    if iter_num > 1:
+        previous_cumulative_file = os.path.join(
+            base_experiment_path,
+            f"iter_{iter_num - 1}",
+            "mining",
+            "cumulative_mined_unique_names.json",
+        )
+        if not os.path.isfile(previous_cumulative_file):
+            raise FileNotFoundError(
+                f"Iteration {iter_num} requires the previous iteration's "
+                f"cumulative mined unique names: {previous_cumulative_file}"
+            )
+        with open(previous_cumulative_file, "r", encoding="utf-8") as f:
+            previous_names = {
+                str(record.get("unique_name") or "").strip()
+                for record in json.load(f)
+            }
+        previous_names.discard("")
+
+    delta_pairs = []
+    for record in current_pairs:
+        unique_name = str(record.get("unique_name") or "").strip()
+        if not unique_name:
+            raise ValueError(f"Mined pair record is missing unique_name: {record}")
+        if unique_name not in previous_names:
+            delta_pairs.append(record)
+
+    output_dir = os.path.dirname(output_file)
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
+    with open(output_file, "w", encoding="utf-8") as f:
+        json.dump(delta_pairs, f, indent=2)
+    print(
+        f"Delta mined pairs: iter={iter_num}, this_iter={len(current_pairs)}, "
+        f"new={len(delta_pairs)}, previously_seen={len(previous_names)}, "
+        f"output={output_file}"
+    )
+    return output_file
+
+
 def write_iteration_summary(
     experiment_dir: str,
     iter_num: int,

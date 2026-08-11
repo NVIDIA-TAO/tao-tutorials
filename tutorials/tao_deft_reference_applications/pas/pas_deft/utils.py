@@ -20,6 +20,10 @@ def create_clip_train_config(
     val_image_dir: str = "",
     val_caption_dir: str = "",
     continual_dataset: bool = False,
+    sdg_image_dir: str = "",
+    sdg_caption_dir: str = "",
+    sdg_image_list_file: str = "",
+    sdg_pairs_file: str = "",
 ) -> str:
     """Create a TAO CLIP training config YAML by patching a source config.
 
@@ -50,6 +54,11 @@ def create_clip_train_config(
                                 previous iteration's, and its per-iteration
                                 mined sets — disjoint by construction — must
                                 all stay in training.
+        sdg_image_dir:          SDG-generated dataset ``image_dir``.
+        sdg_caption_dir:        SDG-generated dataset ``caption_dir``.
+        sdg_image_list_file:    SDG-generated dataset image list. When empty no
+                                SDG entry is appended to the training datasets.
+        sdg_pairs_file:         Optional SDG ``train_pairs_file``.
 
     Returns:
         Path to the newly written config YAML.
@@ -124,6 +133,17 @@ def create_clip_train_config(
         if mined_pairs_file:
             mined_entry["train_pairs_file"] = mined_pairs_file
         _add_dataset(mined_entry)
+
+    if sdg_image_list_file:
+        sdg_entry = {
+            "image_dir": sdg_image_dir,
+            "caption_dir": sdg_caption_dir,
+            "image_list_file": sdg_image_list_file,
+            "caption_file_suffix": ".txt",
+        }
+        if sdg_pairs_file:
+            sdg_entry["train_pairs_file"] = sdg_pairs_file
+        _add_dataset(sdg_entry)
 
     train_data_cfg["datasets"] = datasets
 
