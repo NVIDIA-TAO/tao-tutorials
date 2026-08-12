@@ -501,6 +501,7 @@ def augment_images_using_global_attr_dist_matching(
     payload_template_path: str,
     s3_root: str,
     max_budget: int,
+    caption_policy: str = "all",
 ) -> None:
     """Compute the residual attribute gap and write SDG runner inputs.
 
@@ -630,7 +631,7 @@ def augment_images_using_global_attr_dist_matching(
         "input_image_list_path": image_list_path,
         "s3_root": s3_root,
         "distribution_yaml_path": output_schema_path,
-        "caption_policy": "all",
+        "caption_policy": caption_policy,
     }
     runner_config_path = os.path.join(datagen_iter_path, "pas_sdg_runner_config.yaml")
     with open(runner_config_path, "w") as f:

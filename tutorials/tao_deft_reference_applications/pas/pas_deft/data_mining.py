@@ -1549,15 +1549,25 @@ def write_delta_mined_pairs(
 ) -> str:
     """Write the mined pairs that are new as of this DEFT iteration.
 
-    SDG augments only what mining surfaced *this* round. Names carried over
+    SDG augments only what mining surfaced *this* round. Images carried over
     from earlier iterations are already represented in the training set, so
     re-augmenting them would spend the generation budget reproducing images the
     model has already seen.
 
-    The previous iteration's cumulative unique-names file
-    (:func:`track_cumulative_mined_unique_names`) is the authoritative record of
-    what came before, so this diffs against it rather than recomputing the
-    history. Iteration 1 has no predecessor and its delta is the full mined set.
+    Deduplicates by ``image_path`` (the physical file path), which is the
+    correct key for SDG budget accounting — the same image should not be
+    submitted for augmentation twice across iterations regardless of how many
+    caption variants were mined for it.
+
+    Also writes two cumulative tracking files to the same directory as
+    ``output_file``:
+
+    * ``cumulative_mined_pairs.json`` — full deduplicated pairs across all
+      iterations up to and including this one (used by subsequent iterations
+      as the previous-cumulative baseline).
+    * ``cumulative_mined_unique_names.json`` — list of
+      ``{image_path, unique_name}`` records for the same set, for lightweight
+      membership checks.
 
     Args:
         mined_pairs_file:     Path to this iteration's mined_pairs.json.
@@ -1571,46 +1581,81 @@ def write_delta_mined_pairs(
     import json
     import os
 
+    def _dedupe_by_image_path(records):
+        seen = set()
+        out = []
+        for record in records:
+            key = str(record.get("image_path") or "").strip()
+            if not key:
+                raise ValueError(f"Mined pair record is missing image_path: {record}")
+            if key not in seen:
+                seen.add(key)
+                out.append(record)
+        return out
+
     with open(mined_pairs_file, "r", encoding="utf-8") as f:
         current_pairs = json.load(f)
 
-    previous_names = set()
+    current_deduped = _dedupe_by_image_path(current_pairs)
+
+    previous_cumulative_pairs = []
     if iter_num > 1:
         previous_cumulative_file = os.path.join(
             base_experiment_path,
             f"iter_{iter_num - 1}",
             "mining",
-            "cumulative_mined_unique_names.json",
+            "cumulative_mined_pairs.json",
         )
         if not os.path.isfile(previous_cumulative_file):
             raise FileNotFoundError(
                 f"Iteration {iter_num} requires the previous iteration's "
-                f"cumulative mined unique names: {previous_cumulative_file}"
+                f"cumulative mined pairs: {previous_cumulative_file}"
             )
         with open(previous_cumulative_file, "r", encoding="utf-8") as f:
-            previous_names = {
-                str(record.get("unique_name") or "").strip()
-                for record in json.load(f)
-            }
-        previous_names.discard("")
+            previous_cumulative_pairs = json.load(f)
 
-    delta_pairs = []
-    for record in current_pairs:
-        unique_name = str(record.get("unique_name") or "").strip()
-        if not unique_name:
-            raise ValueError(f"Mined pair record is missing unique_name: {record}")
-        if unique_name not in previous_names:
-            delta_pairs.append(record)
+    previous_image_paths = {
+        str(record.get("image_path") or "").strip()
+        for record in previous_cumulative_pairs
+    }
+    previous_image_paths.discard("")
+
+    delta_pairs = [
+        record for record in current_deduped
+        if str(record.get("image_path") or "").strip() not in previous_image_paths
+    ]
+
+    cumulative_pairs = _dedupe_by_image_path(previous_cumulative_pairs + current_deduped)
 
     output_dir = os.path.dirname(output_file)
     if output_dir:
         os.makedirs(output_dir, exist_ok=True)
     with open(output_file, "w", encoding="utf-8") as f:
         json.dump(delta_pairs, f, indent=2)
+
+    mining_dir = os.path.dirname(output_file)
+    cumulative_pairs_file = os.path.join(mining_dir, "cumulative_mined_pairs.json")
+    with open(cumulative_pairs_file, "w", encoding="utf-8") as f:
+        json.dump(cumulative_pairs, f, indent=2)
+
+    cumulative_names_file = os.path.join(mining_dir, "cumulative_mined_unique_names.json")
+    with open(cumulative_names_file, "w", encoding="utf-8") as f:
+        json.dump(
+            [
+                {
+                    "image_path": str(r.get("image_path") or "").strip(),
+                    "unique_name": str(r.get("unique_name") or "").strip(),
+                }
+                for r in cumulative_pairs
+            ],
+            f,
+            indent=2,
+        )
+
     print(
-        f"Delta mined pairs: iter={iter_num}, this_iter={len(current_pairs)}, "
-        f"new={len(delta_pairs)}, previously_seen={len(previous_names)}, "
-        f"output={output_file}"
+        f"Delta mined pairs: iter={iter_num}, this_iter={len(current_deduped)}, "
+        f"new={len(delta_pairs)}, previously_seen={len(previous_image_paths)}, "
+        f"cumulative={len(cumulative_pairs)}, output={output_file}"
     )
     return output_file
 
@@ -1624,20 +1669,26 @@ def write_iteration_summary(
     training_checkpoint: str,
     next_checkpoint_path: str,
     experiment_id: str = "",
+    delta_mined_pairs_file: str = "",
+    cumulative_mined_pairs_file: str = "",
+    datagen_dir: str = "",
 ) -> str:
     """Write iteration_summary.json at the end of a DEFT iteration.
 
     Captures the key artifact paths and checkpoint state for each iteration.
 
     Args:
-        experiment_dir:       Directory for this iteration's outputs.
-        iter_num:             Current DEFT iteration number (1-based).
-        gaps_parquet:         Path to the gap-analysis output parquet.
-        mined_parquet:        Path to the raw k-NN mined parquet.
-        mined_pairs_file:     Path to the final mined pairs JSON.
-        training_checkpoint:  Checkpoint used as input for this iteration's training.
-        next_checkpoint_path: Expected path of the best checkpoint produced by training.
-        experiment_id:        Optional unique ID for this experiment run.
+        experiment_dir:              Directory for this iteration's outputs.
+        iter_num:                    Current DEFT iteration number (1-based).
+        gaps_parquet:                Path to the gap-analysis output parquet.
+        mined_parquet:               Path to the raw k-NN mined parquet.
+        mined_pairs_file:            Path to the final mined pairs JSON.
+        training_checkpoint:         Checkpoint used as input for this iteration's training.
+        next_checkpoint_path:        Expected path of the best checkpoint produced by training.
+        experiment_id:               Optional unique ID for this experiment run.
+        delta_mined_pairs_file:      Optional path to the SDG delta mined pairs JSON.
+        cumulative_mined_pairs_file: Optional path to the cumulative mined pairs JSON.
+        datagen_dir:                 Optional path to the SDG data generation directory.
 
     Returns:
         Path to the written iteration_summary.json.
@@ -1657,6 +1708,12 @@ def write_iteration_summary(
         "mined_pairs_file": mined_pairs_file,
         "eval_results_dir": experiment_dir,
     }
+    if delta_mined_pairs_file:
+        payload["delta_mined_pairs"] = delta_mined_pairs_file
+    if cumulative_mined_pairs_file:
+        payload["cumulative_mined_pairs"] = cumulative_mined_pairs_file
+    if datagen_dir:
+        payload["datagen_dir"] = datagen_dir
     out_path = os.path.join(experiment_dir, "iteration_summary.json")
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(payload, f, indent=2)
