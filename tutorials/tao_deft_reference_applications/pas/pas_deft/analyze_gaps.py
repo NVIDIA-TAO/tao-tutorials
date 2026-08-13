@@ -894,6 +894,8 @@ def analyze_clip_inference_gaps(
             "caption_history_group_key": query_info.get("group_key", ""),
             "unique_name": name,
             "image_path": str(row.get("image_path") or ""),
+            "image_attr_vector": row.get("image_attr_values") or [],
+            "text_attr_vector": row.get("text_attr_values") or [],
         }
 
     records = []
@@ -907,7 +909,7 @@ def analyze_clip_inference_gaps(
         "selection_basis", "selection_stage",
         "normalized_text", "caption_history_count",
         "caption_history_group_key",
-        "unique_name", "image_path",
+        "unique_name", "image_path", "image_attr_vector", "text_attr_vector",
     ]
     gaps_df = pd.DataFrame(records, columns=columns)
     gaps_dir = os.path.dirname(gaps_parquet)

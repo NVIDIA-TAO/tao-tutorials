@@ -161,6 +161,27 @@ class DataDistributionNode:
             for child in self.child_templates.values()
         )
 
+    def _validate_assignment_path(self, assignment: dict):
+        attr_value = str(assignment.get(self.attr_name, MISSING_VALUE))
+        self.distribution._value_index(attr_value)
+        if attr_value == MISSING_VALUE:
+            if self._has_descendant_assignment_attr(assignment):
+                raise ValueError(
+                    f"{self.attr_name}={MISSING_VALUE} is a leaf and cannot have "
+                    "conditional descendants"
+                )
+            return
+        for child_attr, child_template in self.child_templates.items():
+            if (
+                child_attr not in assignment
+                and child_template._has_descendant_assignment_attr(assignment)
+            ):
+                raise ValueError(
+                    f"Conditional attribute under {child_attr} cannot update "
+                    f"without parent attribute {child_attr}"
+                )
+            self.children[child_attr][attr_value]._validate_assignment_path(assignment)
+
     def _update_from_root_assignment(self, assignment: dict, count: int = 1):
         attr_value = str(assignment.get(self.attr_name, MISSING_VALUE))
         self.distribution._increment_from_assignment(attr_value, count=count)
@@ -188,6 +209,34 @@ class DataDistributionNode:
                     other.children[child_attr][parent_value], scale_factor
                 )
 
+    def validate_counts(self):
+        for child_attr, nodes_by_parent_value in self.children.items():
+            expected_parent_values = set(self._non_missing_values())
+            actual_parent_values = set(nodes_by_parent_value)
+            if actual_parent_values != expected_parent_values:
+                raise ValueError(
+                    f"Invalid child branches for {child_attr} under {self.attr_name}: "
+                    f"expected {sorted(expected_parent_values)}, "
+                    f"got {sorted(actual_parent_values)}"
+                )
+            if MISSING_VALUE in nodes_by_parent_value:
+                raise ValueError(f"{self.attr_name}={MISSING_VALUE} must be a leaf")
+            for parent_value, parent_count in zip(
+                self.distribution.alphabet,
+                self.distribution.data_counts,
+            ):
+                if parent_value == MISSING_VALUE:
+                    continue
+                child_node = nodes_by_parent_value[parent_value]
+                child_count = child_node.distribution.num_data
+                if not np.isclose(child_count, parent_count):
+                    raise ValueError(
+                        f"Count mismatch for {child_attr} under "
+                        f"{self.attr_name}={parent_value}: "
+                        f"expected {parent_count}, got {child_count}"
+                    )
+                child_node.validate_counts()
+
     def to_log_probability_dict(self) -> dict:
         result: dict = {"distribution": self.distribution.probability_dict()}
         for child_attr, nodes_by_parent_value in self.children.items():
@@ -204,25 +253,49 @@ class DataDistributionForest:
 
     def __init__(self, schema: List[dict]):
         self.schema = schema
-        self._attr_names: List[str] = []
+        self._attr_names: set = set()
         self.roots: List[DataDistributionNode] = []
         self.roots_by_attr: Dict[str, DataDistributionNode] = {}
-        for entry in schema:
-            root = self._build_node(entry)
+        for node_spec in schema:
+            root = self._parse_schema_node(node_spec)
             self.roots.append(root)
             self.roots_by_attr[root.attr_name] = root
-            self._attr_names.append(root.attr_name)
 
-    def _build_node(self, entry: dict) -> DataDistributionNode:
-        attr_name = str(entry["attr_name"])
-        alphabet = [str(v) for v in entry["alphabet"]]
-        node = DataDistributionNode(attr_name, alphabet)
-        child_entry = entry.get("conditional_child")
-        if child_entry:
-            node.add_child_template(self._build_node(child_entry))
+    def _parse_schema_node(self, node_spec: dict) -> DataDistributionNode:
+        if len(node_spec) != 1:
+            raise ValueError(f"Each schema node must contain one attribute: {node_spec}")
+        attr_name, spec = next(iter(node_spec.items()))
+        if attr_name in self._attr_names:
+            raise ValueError(f"Attribute {attr_name} appears more than once in the schema")
+        self._attr_names.add(attr_name)
+        child_specs: List[dict] = []
+        if isinstance(spec, list) and not all(isinstance(item, dict) for item in spec):
+            alphabet = spec
+        elif isinstance(spec, dict):
+            alphabet = spec.get("alphabet") or spec.get("values")
+            child_specs = spec.get("children", [])
+        else:
+            raise ValueError(
+                f"Schema node {attr_name} must declare a fixed alphabet. "
+                "Use {'alphabet': [...], 'children': [...]} for conditional attributes."
+            )
+        if not alphabet:
+            raise ValueError(f"Schema node {attr_name} has an empty or missing alphabet")
+        if len(child_specs) > 1:
+            raise ValueError(
+                f"Schema node {attr_name} can have at most one conditional child attribute"
+            )
+        node = DataDistributionNode(attr_name, alphabet=alphabet)
+        for child_spec in child_specs:
+            node.add_child_template(self._parse_schema_node(child_spec))
         return node
 
     def update(self, assignment: dict):
+        unknown_attrs = set(assignment) - self._attr_names
+        if unknown_attrs:
+            raise ValueError(f"Unknown attributes in assignment: {sorted(unknown_attrs)}")
+        for root in self.roots:
+            root._validate_assignment_path(assignment)
         for root in self.roots:
             root._update_from_root_assignment(assignment)
 
@@ -234,25 +307,96 @@ class DataDistributionForest:
 
     def validate_counts(self):
         for root in self.roots:
-            if root.distribution.num_data < 0:
-                raise ValueError(
-                    f"Negative count for {root.attr_name}: {root.distribution.num_data}"
+            root.validate_counts()
+
+    def _output_value(self, value: str) -> str:
+        return OUTPUT_MISSING_VALUE if value == MISSING_VALUE else value
+
+    def _conditioning_key(self, conditioning_path: List[Tuple[str, str]]) -> str:
+        if len(conditioning_path) == 1:
+            return self._output_value(conditioning_path[0][1])
+        return "|".join(
+            f"{attr_name}={self._output_value(attr_value)}"
+            for attr_name, attr_value in conditioning_path
+        )
+
+    def _depends_on(self, conditioning_path: List[Tuple[str, str]]):
+        attr_names = [attr_name for attr_name, _ in conditioning_path]
+        if len(attr_names) == 1:
+            return attr_names[0]
+        return attr_names
+
+    def _add_conditional_probability_distribution(
+        self,
+        conditional_variables: dict,
+        child_attr: str,
+        conditioning_path: List[Tuple[str, str]],
+        probability_distribution: dict,
+    ):
+        depends_on = self._depends_on(conditioning_path)
+        conditional_entry = conditional_variables.setdefault(
+            child_attr,
+            {"depends_on": depends_on, "distributions": {}},
+        )
+        if conditional_entry["depends_on"] != depends_on:
+            raise ValueError(
+                f"Conditional variable {child_attr} has incompatible conditioning paths"
+            )
+        conditional_entry["distributions"][
+            self._conditioning_key(conditioning_path)
+        ] = probability_distribution
+
+    def _collect_conditional_probability_distributions(
+        self,
+        node: DataDistributionNode,
+        ancestor_path: List[Tuple[str, str]],
+        conditional_variables: dict,
+    ):
+        for child_attr, nodes_by_parent_value in node.children.items():
+            for parent_value, child_node in nodes_by_parent_value.items():
+                conditioning_path = ancestor_path + [(node.attr_name, parent_value)]
+                probability_distribution = child_node.distribution.probability_dict()
+                if probability_distribution:
+                    self._add_conditional_probability_distribution(
+                        conditional_variables,
+                        child_attr,
+                        conditioning_path,
+                        probability_distribution,
+                    )
+                self._collect_conditional_probability_distributions(
+                    child_node, conditioning_path, conditional_variables,
                 )
 
-    def log_probability_schema(self, output_path: str):
-        schema_out = []
+    def to_probability_schema(self) -> dict:
+        self.validate_counts()
+        variables: dict = {}
+        conditional_variables: dict = {}
         for root in self.roots:
-            entry = {"attr_name": root.attr_name}
-            entry.update(root.to_log_probability_dict())
-            schema_out.append(entry)
-        with open(output_path, "w", encoding="utf-8") as f:
-            yaml.safe_dump(schema_out, f, default_flow_style=False, allow_unicode=True)
+            probability_distribution = root.distribution.probability_dict()
+            if probability_distribution:
+                variables[root.attr_name] = probability_distribution
+            self._collect_conditional_probability_distributions(
+                root, [], conditional_variables,
+            )
+        return {
+            "variable_distribution": {
+                "variables": variables,
+                "conditional_variables": conditional_variables,
+            }
+        }
+
+    def log_probability_schema(self, output_path: Optional[str] = None) -> dict:
+        probability_schema = self.to_probability_schema()
+        if output_path is not None:
+            with open(output_path, "w", encoding="utf-8") as f:
+                yaml.dump(probability_schema, f, indent=2)
+        return probability_schema
 
     @classmethod
     def from_json(cls, json_path: str) -> "DataDistributionForest":
         with open(json_path, "r", encoding="utf-8") as f:
             data = json.load(f)
-        return data
+        return cls(data)
 
 
 def _subtract_distribution_forests(
@@ -490,7 +634,7 @@ def _forest_size(forest: DataDistributionForest) -> float:
     return float(root_sizes[0])
 
 
-def augment_images_using_global_attr_dist_matching(
+def prep_augment_images_using_global_attr_dist_matching(
     datagen_iter_path: str,
     weak_queries_parquet: str,
     delta_mined_pairs_json: str,
@@ -631,6 +775,7 @@ def augment_images_using_global_attr_dist_matching(
         "input_image_list_path": image_list_path,
         "s3_root": s3_root,
         "distribution_yaml_path": output_schema_path,
+        "num_augmentations": 1,
         "caption_policy": caption_policy,
     }
     runner_config_path = os.path.join(datagen_iter_path, "pas_sdg_runner_config.yaml")
@@ -964,6 +1109,11 @@ def prepare_pas_sdg_tao_data(
     ) -> List[int]:
         if query_type not in _TEXT_ATTR_WIDTH_BY_QUERY_TYPE:
             raise ValueError(f"Unsupported query type: {query_type}")
+        if len(image_attr_values) != len(_VECTOR_ATTRIBUTES):
+            raise ValueError(
+                f"Expected {len(_VECTOR_ATTRIBUTES)} image attributes, "
+                f"got {len(image_attr_values)}"
+            )
         width = _TEXT_ATTR_WIDTH_BY_QUERY_TYPE[query_type]
         values = []
         for index, attribute in enumerate(_VECTOR_ATTRIBUTES):
