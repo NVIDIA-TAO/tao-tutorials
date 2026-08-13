@@ -74,14 +74,6 @@ class PasDeftConfig:
                 f"/{os.path.basename(self.base_experiment_path)}."
             )
 
-        self.tao_pytorch_root: str = _exp.get("tao_pytorch_root", "")
-        if not self.tao_pytorch_root:
-            for _p in (self.train_config, self.eval_config):
-                _marker = "/nvidia_tao_pytorch/"
-                if _marker in _p:
-                    self.tao_pytorch_root = _p.split(_marker, 1)[0]
-                    break
-
         # ── Visualization (contact sheets / t-SNE) ─────────────────────────
         _viz = _cfg.get("visualization", {}) or {}
         self.visualize: bool = bool(
