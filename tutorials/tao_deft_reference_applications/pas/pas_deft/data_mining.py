@@ -1541,6 +1541,24 @@ def track_cumulative_mined_unique_names(
     return output_file
 
 
+def cumulative_mined_pairs_path(base_experiment_path: str, iter_num: int) -> str:
+    """Canonical location of one iteration's cumulative mined pairs JSON.
+
+    Both the write (this iteration) and the read (the previous iteration's
+    baseline) in :func:`write_delta_mined_pairs` go through here, so the two
+    cannot drift apart. Lives under ``mining/`` because it is cumulative
+    *mining* history — ``datagen/`` holds only the per-iteration SDG inputs.
+    """
+    import os
+
+    return os.path.join(
+        base_experiment_path,
+        f"iter_{iter_num}",
+        "mining",
+        "cumulative_mined_pairs.json",
+    )
+
+
 def write_delta_mined_pairs(
     mined_pairs_file: str,
     base_experiment_path: str,
@@ -1559,15 +1577,19 @@ def write_delta_mined_pairs(
     submitted for augmentation twice across iterations regardless of how many
     caption variants were mined for it.
 
-    Also writes two cumulative tracking files to the same directory as
-    ``output_file``:
+    Also writes two cumulative tracking files:
 
-    * ``cumulative_mined_pairs.json`` — full deduplicated pairs across all
-      iterations up to and including this one (used by subsequent iterations
-      as the previous-cumulative baseline).
-    * ``cumulative_mined_unique_names.json`` — list of
+    * ``<base>/iter_<n>/mining/cumulative_mined_pairs.json`` — full deduplicated
+      pairs across all iterations up to and including this one. The next
+      iteration reads this back as its previous-cumulative baseline, so its
+      location is fixed by :func:`cumulative_mined_pairs_path` rather than
+      derived from ``output_file``.
+    * ``sdg_cumulative_mined_names.json``, beside ``output_file`` — list of
       ``{image_path, unique_name}`` records for the same set, for lightweight
-      membership checks.
+      membership checks. Distinct from the mining flow's
+      ``cumulative_mined_unique_names.json`` (written by
+      :func:`track_cumulative_mined_unique_names`), which holds only
+      ``unique_name``.
 
     Args:
         mined_pairs_file:     Path to this iteration's mined_pairs.json.
@@ -1600,11 +1622,8 @@ def write_delta_mined_pairs(
 
     previous_cumulative_pairs = []
     if iter_num > 1:
-        previous_cumulative_file = os.path.join(
-            base_experiment_path,
-            f"iter_{iter_num - 1}",
-            "mining",
-            "cumulative_mined_pairs.json",
+        previous_cumulative_file = cumulative_mined_pairs_path(
+            base_experiment_path, iter_num - 1,
         )
         if not os.path.isfile(previous_cumulative_file):
             raise FileNotFoundError(
@@ -1633,12 +1652,17 @@ def write_delta_mined_pairs(
     with open(output_file, "w", encoding="utf-8") as f:
         json.dump(delta_pairs, f, indent=2)
 
-    mining_dir = os.path.dirname(output_file)
-    cumulative_pairs_file = os.path.join(mining_dir, "cumulative_mined_pairs.json")
+    cumulative_pairs_file = cumulative_mined_pairs_path(base_experiment_path, iter_num)
+    os.makedirs(os.path.dirname(cumulative_pairs_file), exist_ok=True)
     with open(cumulative_pairs_file, "w", encoding="utf-8") as f:
         json.dump(cumulative_pairs, f, indent=2)
 
-    cumulative_names_file = os.path.join(mining_dir, "cumulative_mined_unique_names.json")
+    # Named distinctly from the mining flow's cumulative_mined_unique_names.json,
+    # which carries only `unique_name`; this one is the image_path-keyed index
+    # SDG dedupes against. Stays beside the delta file in the SDG working dir.
+    cumulative_names_file = os.path.join(
+        output_dir or ".", "sdg_cumulative_mined_names.json",
+    )
     with open(cumulative_names_file, "w", encoding="utf-8") as f:
         json.dump(
             [

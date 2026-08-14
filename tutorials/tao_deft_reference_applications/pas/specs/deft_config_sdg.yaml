@@ -33,7 +33,7 @@ mining:
       count_expanded_pairs_toward_target: "auto"
 
 sdg:
-  enabled: false
+  enabled: true
   schema_path: "specs/sdg_input_schema.yaml"
   payload_template_path: "specs/sdg_payload_template.json"
   attr_vocab_path: "specs/attribute_vocab.json"

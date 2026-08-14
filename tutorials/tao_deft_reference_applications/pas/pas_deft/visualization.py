@@ -564,7 +564,7 @@ def create_tsne_visualization(
         "Augmented Samples": "#2ecc71",
         "Previous Training Data": "#3498db",
     }
-    aug_marker_map = {"mined": "^", "omniverse": "s"}
+    aug_marker_map = {"mined": "^", "omniverse": "s", "sdg": "D"}
     fallback_markers = ["D", "P", "X", "*", "v", "<", ">"]
 
     draw_order = (
