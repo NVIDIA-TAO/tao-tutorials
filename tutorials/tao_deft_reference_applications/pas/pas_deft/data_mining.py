@@ -254,7 +254,7 @@ def materialize_pas_pool_split(
     augmented_suffix: str = "_Aug",
     query_types: str = "",
     max_aug_pool_rows: int = 0,
-    mining_pool_mode: str = "augmented",
+    mining_pool_mode: str = "real_and_augmented",
 ):
     """Materialize the PAS mining pool image list and pairs file.
 
@@ -271,6 +271,11 @@ def materialize_pas_pool_split(
         mining_pool_mode:          Which rows go into pool:
                                    ``real``, ``augmented``, or
                                    ``real_and_augmented``.
+
+    Raises:
+        ValueError: ``mining_pool_mode`` is empty or contains a token that
+            isn't one of ``real``/``augmented``/``real_and_augmented`` (or
+            their accepted synonyms/combinations).
     """
     import json
     import os
@@ -278,6 +283,7 @@ def materialize_pas_pool_split(
     from pas_deft.pairs_io import (
         discard_partial_outputs,
         iter_json_records,
+        normalize_mining_pool_mode,
         normalize_row,
         split_csv,
     )
@@ -293,15 +299,6 @@ def materialize_pas_pool_split(
             if normalized in {"false", "0", "no", "n", "off"}:
                 return False
         return bool(augmented_suffix) and dataset.endswith(augmented_suffix)
-
-    def _mode_tokens(value):
-        normalized = str(value or "").lower().replace("+", ",").replace(";", ",")
-        tokens = split_csv(normalized)
-        if "real_and_augmented" in tokens or "all" in tokens:
-            tokens.update({"real", "augmented"})
-        if "aug" in tokens:
-            tokens.add("augmented")
-        return tokens or {"augmented"}
 
     required = [p for p in (aug_pool_image_list_file, aug_pool_pairs_file) if p]
     if required and all(os.path.isfile(p) for p in required):
@@ -322,7 +319,7 @@ def materialize_pas_pool_split(
 
     qtypes = split_csv(query_types)
     max_aug_pool_rows = int(max_aug_pool_rows or 0)
-    pool_modes = _mode_tokens(mining_pool_mode)
+    pool_modes = normalize_mining_pool_mode(mining_pool_mode)
     include_real_pool = "real" in pool_modes
     include_aug_pool = "augmented" in pool_modes
 

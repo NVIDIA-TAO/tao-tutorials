@@ -4,6 +4,8 @@ import json
 import os
 import yaml
 
+from pas_deft.pairs_io import normalize_mining_pool_mode
+
 
 def _bool_str(value) -> str:
     """Convert a config value to the 'true'/'false' string expected by pipeline functions."""
@@ -146,7 +148,10 @@ class PasDeftConfig:
         )
         self.pas_max_seed_rows: int = int(_pas.get("max_seed_rows", 0) or 0)
         self.pas_max_aug_pool_rows: int = int(_pas.get("max_aug_pool_rows", 0) or 0)
-        self.pas_mining_pool_mode: str = _pas.get("mining_pool_mode", "real_and_augmented")
+        self.pas_mining_pool_mode: str = str(
+            _pas.get("mining_pool_mode", "real_and_augmented")
+        ).strip().lower()
+        normalize_mining_pool_mode(self.pas_mining_pool_mode)
         self.pas_val_sample_size: int = int(_pas.get("val_sample_size", 512) or 512)
         self.pas_train_pairs_source_file: str = _abs_data_path(
             _pas.get("train_pairs_source_file", "")

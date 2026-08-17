@@ -17,7 +17,10 @@ for every reader instead of once per copy.
 - :func:`split_csv` — comma-separated option string → set of tokens.
 - :func:`infer_dataset` — recover the dataset name from an image path.
 - :func:`normalize_row` — validate and canonicalize one pairs record.
+- :func:`normalize_mining_pool_mode` — validate/parse ``pas.mining_pool_mode``.
 """
+
+MINING_POOL_MODES = ("real", "augmented", "real_and_augmented")
 
 import contextlib
 import json
@@ -109,6 +112,38 @@ def split_csv(value) -> set:
     return {
         item.strip() for item in str(value or "").split(",") if item.strip()
     }
+
+
+def normalize_mining_pool_mode(value) -> set:
+    """Parse ``pas.mining_pool_mode`` into the set of row kinds to include.
+
+    Accepts ``real``, ``augmented``, ``real_and_augmented``/``all``, the
+    shorthand ``aug``, or a comma/``+``/``;``-separated combination of these
+    (e.g. ``"real,augmented"``). Anything else — a misspelling, an empty
+    string, an unsupported synonym — raises ``ValueError`` instead of
+    silently substituting a different pool, since a wrong pool composition
+    changes what the mining loop trains on without any visible symptom.
+    """
+    normalized = str(value or "").strip().lower().replace("+", ",").replace(";", ",")
+    tokens = split_csv(normalized)
+    if not tokens:
+        raise ValueError(
+            f"mining_pool_mode is empty; expected one of {MINING_POOL_MODES}"
+        )
+    expanded = set()
+    for token in tokens:
+        if token in ("real_and_augmented", "all"):
+            expanded.update({"real", "augmented"})
+        elif token in ("aug", "augmented"):
+            expanded.add("augmented")
+        elif token == "real":
+            expanded.add("real")
+        else:
+            raise ValueError(
+                f"Unrecognized mining_pool_mode value {value!r} "
+                f"(unknown token {token!r}); expected one of {MINING_POOL_MODES}"
+            )
+    return expanded
 
 
 def infer_dataset(image_path) -> str:
