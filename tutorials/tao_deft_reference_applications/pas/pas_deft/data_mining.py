@@ -385,6 +385,18 @@ def materialize_pas_pool_split(
         f"-> {aug_pool_pairs_file}"
     )
 
+    if pool_count == 0:
+        print(
+            f"WARNING: mining pool is EMPTY (source file: "
+            f"{pool_pairs_source_file}, {skipped_unknown_dataset} malformed, "
+            f"{skipped_query_type} query-type-filtered). k-NN mining will have "
+            "no candidates to mine against every DEFT iteration, so gap "
+            "analysis and mining will run but recover nothing — training "
+            "will proceed on seed/previous data alone with no pool "
+            "augmentation. Check pas.pool_pairs_source_file, "
+            "pas.mining_pool_mode, and pas.query_types in deft_config.yaml."
+        )
+
 
 def convert_clip_image_list_to_parquet(
     image_list_file: str,
