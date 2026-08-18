@@ -553,9 +553,19 @@ def create_tsne_visualization(
         return ""
 
     perplexity = min(30, len(all_embs) - 1)
-    coords = TSNE(
-        n_components=2, random_state=42, perplexity=perplexity,
-    ).fit_transform(all_embs)
+
+    from threadpoolctl import threadpool_limits
+    try:
+        with threadpool_limits(limits=64):
+            coords = TSNE(
+                n_components=2, random_state=42, perplexity=perplexity,
+                n_jobs=min(64, os.cpu_count() or 1),
+            ).fit_transform(all_embs)
+    except Exception as exc:
+        print(
+            f"t-SNE visualisation failed and will be skipped: {exc}"
+        )
+        return ""
 
     labels_arr = np.array(labels)
     sources_arr = np.array(sources)
