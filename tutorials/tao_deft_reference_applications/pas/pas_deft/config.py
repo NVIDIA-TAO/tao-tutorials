@@ -53,6 +53,10 @@ class PasDeftConfig:
         with open(config_path) as f:
             _cfg = yaml.safe_load(f)
 
+        _mining_spec_path = os.path.join(os.path.dirname(config_path), "mining_spec.yaml")
+        with open(_mining_spec_path) as f:
+            _mining_spec = yaml.safe_load(f)
+
         self.sweep_args_str: str = json.dumps({
             "config": config_path,
         })
@@ -106,8 +110,8 @@ class PasDeftConfig:
 
         # ── Mining ─────────────────────────────────────────────────────────
         _mining = _cfg["mining"]
-        self.mining_topn: int = int(_mining.get("topn", 5) or 5)
-        self.knn_metric: str = _mining.get("knn_metric", "cosine")
+        self.mining_topn: int = int(_mining_spec["topn"])
+        self.knn_metric: str = _mining_spec["knn_metric"]
 
         _history_aware = _mining.get("history_aware", {}) or {}
         self.history_aware_enabled: str = _bool_str(_history_aware.get("enabled", False))
