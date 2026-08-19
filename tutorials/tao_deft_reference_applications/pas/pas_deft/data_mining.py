@@ -254,7 +254,7 @@ def materialize_pas_pool_split(
     augmented_suffix: str = "_Aug",
     query_types: str = "",
     max_aug_pool_rows: int = 0,
-    mining_pool_mode: str = "augmented",
+    mining_pool_mode: str = "real_and_augmented",
 ):
     """Materialize the PAS mining pool image list and pairs file.
 
