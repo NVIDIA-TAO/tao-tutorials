@@ -554,12 +554,18 @@ def create_tsne_visualization(
 
     perplexity = min(30, len(all_embs) - 1)
 
+    # OpenBLAS wheels are commonly compiled with a NUM_THREADS ceiling of 64;
+    # on higher-core-count machines, letting BLAS/OpenMP threads scale past
+    # that crashes the process (SIGSEGV/SIGABRT), so cap at whichever is
+    # smaller.
+    max_threads = min(os.cpu_count() or 1, 64)
+
     from threadpoolctl import threadpool_limits
     try:
-        with threadpool_limits(limits=64):
+        with threadpool_limits(limits=max_threads):
             coords = TSNE(
                 n_components=2, random_state=42, perplexity=perplexity,
-                n_jobs=min(64, os.cpu_count() or 1),
+                n_jobs=max_threads,
             ).fit_transform(all_embs)
     except Exception as exc:
         print(
