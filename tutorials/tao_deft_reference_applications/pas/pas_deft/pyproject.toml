@@ -9,6 +9,7 @@ description = "PAS DEFT pipeline utilities — data mining, gap analysis, config
 requires-python = ">=3.9"
 dependencies = [
     "pyyaml",
+    "omegaconf>=2.3",
     "pandas>=1.5",
     "pyarrow>=10",
     "numpy",

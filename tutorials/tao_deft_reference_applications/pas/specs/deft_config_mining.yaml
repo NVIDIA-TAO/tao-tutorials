@@ -14,11 +14,8 @@ training:
   init_checkpoint: ""
   continual_model: false
   continual_dataset: true
-  num_nodes: 1
 
 mining:
-  topn: 25
-  knn_metric: "cosine"
   knn_batch_size: 32
   history_aware:
     enabled: true
