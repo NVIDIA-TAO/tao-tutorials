@@ -1,0 +1,150 @@
+dataset:
+    train_data_sources:
+        - image_dir: "/data/raw-data/train2017"
+          json_file: "/data/raw-data/annotations/instances_train2017.json"
+    val_data_sources:
+        image_dir: "/data/raw-data/val2017"
+        json_file: "/data/raw-data/annotations/instances_val2017.json"
+    test_data_sources:
+        image_dir: "/data/raw-data/"
+        json_file: "/data/raw-data/annotations/instanced_test2017.json"
+    infer_data_sources:
+        image_dir:
+            - "/data/raw-data/val2017/"
+        classmap: "/specs/classmap.txt"
+    batch_size: 8
+    workers: 12
+    remap_mscoco_category: false
+    dataset_type: "default"
+    num_classes: 91
+    eval_class_ids: null
+    augmentation:
+        multi_scales:
+            - 480
+            - 512
+            - 544
+            - 576
+            - 608
+            - 640
+            - 672
+            - 704
+            - 736
+            - 768
+            - 800
+        train_spatial_size:
+            - 640
+            - 640
+        eval_spatial_size:
+            - 640
+            - 640
+        distortion_prob: 0.8
+        iou_crop_prob: 0.0
+        preserve_aspect_ratio: false
+inference:
+  color_map:
+    person: tan
+    bicycle: silver
+    car: blue
+    motorcycle: black
+    airplane: white
+    bus: yellow
+    train: red
+    truck: grey
+    boat: navy
+    traffic light: green
+    fire hydrant: red
+    stop sign: crimson
+    parking meter: slate
+    bench: brown
+    bird: teal
+    cat: orange
+    dog: goldenrod
+    horse: chestnut
+    sheep: ivory
+    cow: white
+    elephant: grey
+    bear: brown
+    zebra: black
+    giraffe: yellow
+    backpack: blue
+    umbrella: magenta
+    handbag: beige
+    tie: burgundy
+    suitcase: black
+    frisbee: lime
+    skis: neon
+    snowboard: violet
+    sports ball: orange
+    kite: skyblue
+    baseball bat: wood
+    baseball glove: tan
+    skateboard: charcoal
+    surfboard: turquoise
+    tennis racket: yellow
+    bottle: clear
+    wine glass: transparent
+    cup: white
+    fork: silver
+    knife: steel
+    spoon: silver
+    bowl: ceramic
+    banana: yellow
+    apple: red
+    sandwich: beige
+    orange: orange
+    broccoli: green
+    carrot: orange
+    hot dog: sienna
+    pizza: gold
+    donut: pink
+    cake: chocolate
+    chair: mahogany
+    couch: charcoal
+    potted plant: emerald
+    bed: white
+    dining table: oak
+    toilet: white
+    tv: black
+    laptop: silver
+    mouse: grey
+    remote: black
+    keyboard: black
+    cell phone: black
+    microwave: white
+    oven: silver
+    toaster: chrome
+    sink: white
+    refrigerator: silver
+    book: blue
+    clock: white
+    vase: cyan
+    scissors: red
+    teddy bear: brown
+    hair drier: black
+    toothbrush: blue
+evaluate:
+  checkpoint: "/results/train/rtdetr_model.pth"
+  conf_threshold: 0.0
+model:
+    backbone: "resnet_50"
+    train_backbone: True
+    #pretrained_backbone_path: "/workspace/tao-experiments/rtdetr/pretrained_weights/c_radio_v2_b.pth"
+    pretrained_backbone_path: "/workspace/tao-experiments/rtdetr/pretrained_weights/nvidia_resnet50_200821.pth"
+    return_interm_indices: [1, 2, 3]
+    dec_layers: 6
+    enc_layers: 1
+    num_queries: 300
+train:
+    num_gpus: 1
+    validation_interval: 1
+    optim:
+        lr_backbone: 1e-5
+        lr: 1e-4
+        lr_steps: [1000]
+        momentum: 0.9
+    num_epochs: 40
+    precision: bf16
+    activation_checkpoint: True
+    enable_ema: True
+    ema:
+        decay: 0.999
