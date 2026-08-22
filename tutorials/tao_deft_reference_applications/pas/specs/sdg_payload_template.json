@@ -1,0 +1,42 @@
+{
+    "input_path": "",
+    "max_imgs": 20000,
+    "output_directory": "",
+    "external_services": true,
+    "service_lifecycle": {
+      "vlm_service": {
+        "enabled": false,
+        "replicas": 1
+      },
+      "llm_service": {
+        "enabled": false,
+        "replicas": 1
+      },
+      "image_edit_service": {
+        "enabled": false,
+        "replicas": 1
+      }
+    },
+    "cosmos": {
+      "vlm_service_url": "",
+      "llm_service_url": "",
+      "image_edit_service_url": "",
+      "vlm_model": "Qwen/Qwen3-VL-30B-A3B-Instruct-FP8",
+      "llm_model": "Qwen/Qwen2.5-14B-Instruct",
+      "image_edit_model": "Qwen/Qwen-Image-Edit-2511",
+      "num_augmentation": 1,
+      "external_services": true,
+      "output_directory": "",
+      "variable_distribution": {}
+    },
+    "event_and_person_attribute_search": {
+      "mode": "image_pas",
+      "vlm_service_url": "",
+      "llm_service_url": "",
+      "vlm_model": "Qwen/Qwen3-VL-30B-A3B-Instruct-FP8",
+      "llm_model": "Qwen/Qwen2.5-14B-Instruct",
+      "external_services": true,
+      "output_directory": ""
+    }
+  }
+  
