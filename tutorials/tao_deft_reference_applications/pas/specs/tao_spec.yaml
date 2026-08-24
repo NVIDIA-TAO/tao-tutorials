@@ -15,6 +15,9 @@ train:
   siglip_loss_mask_mode: none  # none or attribute_match_ignore
   triplet_loss_weight: 0.5  # set > 0 to enable triplet loss
   triplet_margin: 0.2
+  # Note: num_gpus/num_nodes scale the *global* batch size (dataset.train.batch_size
+  # x num_gpus x num_nodes) which affects training dynamics. Modify the learning
+  # rate and/or local batch size appropriately to counter-act this if desired.
   num_gpus: 1
   num_nodes: 1
   gpu_ids: [0]

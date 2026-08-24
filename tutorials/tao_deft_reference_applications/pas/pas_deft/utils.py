@@ -79,6 +79,21 @@ def create_clip_train_config(
     train_data_cfg = dataset_cfg.setdefault("train", {})
     datasets = []
 
+    # Resolved once so the val-auto-sizing below and the global-batch-size
+    # report at the end use the same numbers. train.gpu_ids, when set to more
+    # entries than train.num_gpus, is what TAO actually launches on.
+    try:
+        num_gpus = max(int(train_cfg.get("num_gpus", 1)), 1)
+    except (TypeError, ValueError):
+        num_gpus = 1
+    gpu_ids = train_cfg.get("gpu_ids") or []
+    if isinstance(gpu_ids, list) and gpu_ids:
+        num_gpus = max(num_gpus, len(gpu_ids))
+    try:
+        num_nodes = max(int(train_cfg.get("num_nodes", 1)), 1)
+    except (TypeError, ValueError):
+        num_nodes = 1
+
     if continual_dataset:
         for entry in train_data_cfg.get("datasets") or []:
             if not isinstance(entry, dict):
@@ -148,17 +163,6 @@ def create_clip_train_config(
             val_batch_size = max(int(val_data_cfg.get("batch_size", 1)), 1)
         except (TypeError, ValueError):
             val_batch_size = 1
-        try:
-            num_gpus = max(int(train_cfg.get("num_gpus", 1)), 1)
-        except (TypeError, ValueError):
-            num_gpus = 1
-        gpu_ids = train_cfg.get("gpu_ids") or []
-        if isinstance(gpu_ids, list) and gpu_ids:
-            num_gpus = max(num_gpus, len(gpu_ids))
-        try:
-            num_nodes = max(int(train_cfg.get("num_nodes", 1)), 1)
-        except (TypeError, ValueError):
-            num_nodes = 1
         min_auto_val_samples = val_batch_size * num_gpus * num_nodes
         try:
             requested_auto_val_samples = int(
@@ -243,6 +247,19 @@ def create_clip_train_config(
     print(
         f"Created CLIP train config at {new_config_yaml} "
         f"({n_datasets} dataset.train.datasets entries)"
+    )
+
+    try:
+        per_gpu_batch_size = max(int(train_data_cfg.get("batch_size", 1)), 1)
+    except (TypeError, ValueError):
+        per_gpu_batch_size = 1
+    global_batch_size = per_gpu_batch_size * num_gpus * num_nodes
+    print(
+        f"Global batch size: {global_batch_size} "
+        f"(dataset.train.batch_size={per_gpu_batch_size} x "
+        f"train.num_gpus={num_gpus} x train.num_nodes={num_nodes}). "
+        f"Changing num_gpus changes this and therefore training dynamics — "
+        f"see the train.num_gpus comment in the base TAO spec for details."
     )
     return new_config_yaml
 
@@ -528,7 +545,7 @@ def get_current_checkpoint(
                 return exact[-1]
         return candidates[-1]
 
-    def _publish_selected(selected, best_metric=None):
+    def _publish_selected(selected, best_metric=None, selection_basis="metric", note=""):
         selected_path = selected["path"]
         os.makedirs(os.path.dirname(ckpt_path), exist_ok=True)
         if os.path.lexists(ckpt_path):
@@ -547,12 +564,16 @@ def get_current_checkpoint(
                 shutil.copy2(selected_path, ckpt_path)
                 link_mode = "copy"
         meta_path = os.path.splitext(ckpt_path)[0] + ".json"
+        # This sidecar is the durable record of *why* this checkpoint was
+        # published, metric-best vs. newest-checkpoint fallback
         with open(meta_path, "w", encoding="utf-8") as f:
             json.dump({
                 "selected_checkpoint": selected_path,
                 "published_checkpoint": ckpt_path,
                 "metric_name": metric_name,
                 "metric": best_metric,
+                "selection_basis": selection_basis,
+                "note": note,
                 "publish_mode": link_mode,
             }, f, indent=2)
         print(f"Published best checkpoint ({link_mode}): {ckpt_path}")
@@ -576,11 +597,18 @@ def get_current_checkpoint(
                 f"{best_metric['value']:.6g} from {best_metric['source']}: "
                 f"{selected['path']}"
             )
-            return _publish_selected(selected, best_metric)
+            return _publish_selected(selected, best_metric, selection_basis="metric")
 
     if candidates:
-        print(f"No {metric_name} metric found; using newest checkpoint.")
-        return _publish_selected(candidates[-1], None)
+        note = (
+            f"No {metric_name} metric found in TensorBoard or status.json; "
+            f"published the newest checkpoint by training step instead of "
+            f"selecting by {metric_name}."
+        )
+        print(f"WARNING: {note}")
+        return _publish_selected(
+            candidates[-1], None, selection_basis="newest_checkpoint_fallback", note=note
+        )
 
     raise FileNotFoundError(
         f"No checkpoints found under {train_output_dir}"

@@ -1,6 +1,7 @@
 """Gap analysis for DEFT pipelines.
 
 - :func:`analyze_clip_inference_gaps` — TAO CLIP PAS gap analysis.
+- :func:`summarize_pas_eval_metrics` — canonical mAP/Rank-1/Rank-5 for a PAS eval run.
 """
 
 def analyze_clip_inference_gaps(
@@ -1069,4 +1070,114 @@ def analyze_clip_inference_gaps(
     print(f"Saved weak PAS samples to {samples_csv_path}")
     print(f"Saved weak PAS sample preview to {preview_path}")
     print(f"Saved weak query parquet to {gaps_parquet}")
+
+
+def summarize_pas_eval_metrics(
+    eval_dir: str,
+    query_types: str = "",
+    metric_names: str = "mAP,Rank-1,Rank-5",
+    aggregate: str = "weighted",
+) -> dict:
+    """Compute the single headline metrics for a PAS CLIP eval run.
+
+    ``nvidia_pas_metrics.csv`` has one row per (Dataset, QueryType), plus
+    ``AVG_*``/``WAVG_*`` rollup rows. Different readers can pick different
+    rows/columns and land on different "the mAP for this round" numbers.
+    This function is the one place that decision is made, so every caller
+    (zero-shot summary, per-iteration summary, ad-hoc analysis) reads the
+    same number without re-deriving it from the CSV by hand.
+
+    Fixed convention:
+      * Row selection: ``WAVG_*`` rows (each dataset weighted by its
+        ``num_queries``), not ``AVG_*`` (unweighted mean across datasets)
+        or a single dataset's row. Pass ``aggregate="unweighted"`` for
+        ``AVG_*`` instead.
+      * Query types: ``image_to_image`` rows are always excluded (mirrors
+        gap analysis). If ``query_types`` is given, only those are kept;
+        otherwise every remaining query type is kept and combined into one
+        number, weighted by ``num_queries``.
+      * Metric columns: whichever of ``metric_names`` are present in the CSV
+        (default ``mAP``, ``Rank-1``, ``Rank-5``).
+
+    Args:
+        eval_dir:      Directory containing (or nested under) nvidia_pas_metrics.csv.
+        query_types:   Optional comma-separated query-type filter.
+        metric_names:  Comma-separated metric columns to extract.
+        aggregate:     ``"weighted"`` (WAVG_*) or ``"unweighted"`` (AVG_*).
+
+    Returns:
+        Dict with the resolved metric values, the total ``num_queries``
+        behind them, and the source CSV path, e.g.::
+
+            {"source_csv": ..., "aggregate": "weighted",
+             "query_types": ["text_to_image"], "num_queries": 1234,
+             "mAP": 0.42, "Rank-1": 0.30, "Rank-5": 0.58}
+    """
+    import csv
+    import os
+
+    from pas_deft.pairs_io import split_csv
+
+    if aggregate not in ("weighted", "unweighted"):
+        raise ValueError(f"aggregate must be 'weighted' or 'unweighted', got {aggregate!r}")
+    prefix = "WAVG_" if aggregate == "weighted" else "AVG_"
+
+    candidates = [
+        os.path.join(eval_dir, "nvidia_pas_metrics.csv"),
+        os.path.join(eval_dir, "evaluate", "nvidia_pas_metrics.csv"),
+        os.path.join(eval_dir, "pas_eval", "nvidia_pas_metrics.csv"),
+    ]
+    metrics_path = next((p for p in candidates if os.path.isfile(p)), "")
+    if not metrics_path:
+        raise FileNotFoundError(
+            f"Could not find nvidia_pas_metrics.csv under {eval_dir}. Checked: {candidates}"
+        )
+
+    qtype_filter = split_csv(query_types)
+    metric_cols = [m.strip() for m in str(metric_names or "").split(",") if m.strip()]
+
+    sums = {metric: 0.0 for metric in metric_cols}
+    total_queries = 0
+    matched_query_types = set()
+    with open(metrics_path, newline="", encoding="utf-8") as f:
+        for row in csv.DictReader(f):
+            dataset = str(row.get("Dataset") or "").strip()
+            if not dataset.startswith(prefix):
+                continue
+            qtype = str(row.get("QueryType") or "").strip()
+            if qtype == "image_to_image":
+                continue
+            if qtype_filter and qtype not in qtype_filter:
+                continue
+            try:
+                n_queries = int(float(row.get("num_queries") or 0))
+            except ValueError:
+                n_queries = 0
+            if n_queries <= 0:
+                continue
+            for metric in metric_cols:
+                value = row.get(metric, "")
+                if value in ("", None):
+                    continue
+                try:
+                    sums[metric] += float(value) * n_queries
+                except ValueError:
+                    continue
+            total_queries += n_queries
+            matched_query_types.add(qtype or "(blank)")
+
+    if total_queries == 0:
+        raise ValueError(
+            f"No {prefix}* rows matched query_types={query_types or 'all'!r} in {metrics_path}"
+        )
+
+    result = {
+        "source_csv": metrics_path,
+        "aggregate": aggregate,
+        "query_types": sorted(matched_query_types),
+        "num_queries": total_queries,
+    }
+    for metric in metric_cols:
+        result[metric] = sums[metric] / total_queries
+    return result
     return gaps_parquet

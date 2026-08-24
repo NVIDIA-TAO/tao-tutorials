@@ -7,7 +7,8 @@
 - :func:`convert_mined_parquet_to_clip_image_list` — mined parquet → CLIP image-list + pairs.
 - :func:`summarize_knn_mining` — post-k-NN mining summary (txt + json).
 - :func:`track_cumulative_mined_unique_names` — cumulative mined names across iterations.
-- :func:`write_iteration_summary` — per-iteration artifact/checkpoint summary.
+- :func:`write_iteration_summary` — per-iteration artifact/checkpoint/metrics summary.
+- :func:`write_zero_shot_summary` — zero-shot baseline metrics summary.
 """
 
 
@@ -305,7 +306,13 @@ def materialize_pas_pool_split(
 
     required = [p for p in (aug_pool_image_list_file, aug_pool_pairs_file) if p]
     if required and all(os.path.isfile(p) for p in required):
-        print("PAS pool split already exists; skipping")
+        print(
+            "PAS pool split already exists; skipping and reusing the existing "
+            f"{', '.join(required)}. If the source pool has changed (e.g. new "
+            "images added), delete these files (and the downstream "
+            "embeddings.parquet) before re-running, or this step will silently "
+            "keep the stale pool."
+        )
         return
 
     if not pool_pairs_source_file:
@@ -1562,10 +1569,21 @@ def write_iteration_summary(
     training_checkpoint: str,
     next_checkpoint_path: str,
     experiment_id: str = "",
+    checkpoint_selection_meta_path: str = "",
+    eval_dir: str = "",
+    query_types: str = "",
+    metric_names: str = "mAP,Rank-1,Rank-5",
+    prev_summary_file: str = "",
 ) -> str:
     """Write iteration_summary.json at the end of a DEFT iteration.
 
-    Captures the key artifact paths and checkpoint state for each iteration.
+    Captures the key artifact paths and checkpoint state for each iteration,
+    plus the canonical eval metrics for the round (see
+    :func:`pas_deft.analyze_gaps.summarize_pas_eval_metrics` for exactly
+    which CSV row/columns these come from) and, if ``prev_summary_file`` is
+    given, the delta of each metric versus that prior round. This is the one
+    place those numbers are computed, so nobody has to re-derive "did this
+    round beat the last one" from ``nvidia_pas_metrics.csv`` by hand.
 
     Args:
         experiment_dir:       Directory for this iteration's outputs.
@@ -1576,6 +1594,19 @@ def write_iteration_summary(
         training_checkpoint:  Checkpoint used as input for this iteration's training.
         next_checkpoint_path: Expected path of the best checkpoint produced by training.
         experiment_id:        Optional unique ID for this experiment run.
+        checkpoint_selection_meta_path: Path to the sidecar JSON that
+                               :func:`pas_deft.utils.get_current_checkpoint`
+                               writes next to the published checkpoint,
+                               recording whether it was chosen by its
+                               validation metric or, as a fallback, by being
+                               the newest checkpoint.
+        eval_dir:              Directory holding this round's nvidia_pas_metrics.csv.
+                               Defaults to experiment_dir.
+        query_types:          Optional comma-separated query-type filter for metrics.
+        metric_names:         Comma-separated metric columns to extract.
+        prev_summary_file:    Optional path to the previous round's
+                               iteration_summary.json (or zero-shot summary),
+                               used to compute per-metric deltas.
 
     Returns:
         Path to the written iteration_summary.json.
@@ -1583,9 +1614,12 @@ def write_iteration_summary(
     import json
     import os
 
+    from pas_deft.analyze_gaps import summarize_pas_eval_metrics
+
     os.makedirs(experiment_dir, exist_ok=True)
     payload = {
         "iteration": int(iter_num),
+        "round": f"iter_{int(iter_num)}",
         "experiment_id": experiment_id,
         "experiment_dir": experiment_dir,
         "training_checkpoint": training_checkpoint,
@@ -1595,8 +1629,89 @@ def write_iteration_summary(
         "mined_pairs_file": mined_pairs_file,
         "eval_results_dir": experiment_dir,
     }
+
+    if checkpoint_selection_meta_path and os.path.isfile(checkpoint_selection_meta_path):
+        with open(checkpoint_selection_meta_path, "r", encoding="utf-8") as f:
+            checkpoint_selection = json.load(f)
+        payload["checkpoint_selection"] = checkpoint_selection
+        if checkpoint_selection.get("selection_basis") != "metric":
+            print(
+                f"WARNING: iteration {iter_num} published checkpoint was NOT "
+                f"selected by its validation metric — see "
+                f"checkpoint_selection in {os.path.join(experiment_dir, 'iteration_summary.json')}"
+            )
+
+    metrics = summarize_pas_eval_metrics(
+        eval_dir=eval_dir or experiment_dir,
+        query_types=query_types,
+        metric_names=metric_names,
+    )
+    payload["metrics"] = metrics
+
+    if prev_summary_file and os.path.isfile(prev_summary_file):
+        with open(prev_summary_file, "r", encoding="utf-8") as f:
+            prev_metrics = (json.load(f) or {}).get("metrics") or {}
+        # Only diff the actual metric columns (mAP, Rank-1, ...) — the other
+        # keys in `metrics` (source_csv, aggregate, query_types, num_queries)
+        # are metadata about how the numbers were computed, not metrics
+        # themselves, and subtracting them would be meaningless.
+        metric_cols = [m.strip() for m in str(metric_names or "").split(",") if m.strip()]
+        deltas = {
+            metric: metrics[metric] - prev_metrics[metric]
+            for metric in metric_cols
+            if metric in metrics
+            and metric in prev_metrics
+            and isinstance(metrics[metric], (int, float))
+            and isinstance(prev_metrics[metric], (int, float))
+        }
+        if deltas:
+            payload["prev_summary_file"] = prev_summary_file
+            payload["delta_vs_prev"] = deltas
+
     out_path = os.path.join(experiment_dir, "iteration_summary.json")
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(payload, f, indent=2)
     print(f"Iteration {iter_num} summary written to {out_path}")
+    return out_path
+
+
+def write_zero_shot_summary(
+    zs_dir: str,
+    query_types: str = "",
+    metric_names: str = "mAP,Rank-1,Rank-5",
+) -> str:
+    """Write iteration_summary.json for the zero-shot baseline eval.
+
+    Uses the same canonical metric calculation as :func:`write_iteration_summary`
+    (via :func:`pas_deft.analyze_gaps.summarize_pas_eval_metrics`), so the
+    baseline and every DEFT iteration are directly comparable, and iteration
+    1 can pass this file as ``prev_summary_file`` to get an automatic delta.
+
+    Args:
+        zs_dir:        Directory holding the zero-shot nvidia_pas_metrics.csv.
+        query_types:   Optional comma-separated query-type filter for metrics.
+        metric_names:  Comma-separated metric columns to extract.
+
+    Returns:
+        Path to the written iteration_summary.json.
+    """
+    import json
+    import os
+
+    from pas_deft.analyze_gaps import summarize_pas_eval_metrics
+
+    os.makedirs(zs_dir, exist_ok=True)
+    metrics = summarize_pas_eval_metrics(
+        eval_dir=zs_dir, query_types=query_types, metric_names=metric_names
+    )
+    payload = {
+        "iteration": 0,
+        "round": "zs",
+        "eval_results_dir": zs_dir,
+        "metrics": metrics,
+    }
+    out_path = os.path.join(zs_dir, "iteration_summary.json")
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2)
+    print(f"Zero-shot summary written to {out_path}")
     return out_path

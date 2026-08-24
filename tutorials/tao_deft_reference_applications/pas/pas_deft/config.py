@@ -459,6 +459,13 @@ class PasDeftConfig:
                 f"-v $PWD/{os.path.basename(self.base_experiment_path)}:"
                 f"/{os.path.basename(self.base_experiment_path)}."
             )
+        if self.base_experiment_path.split("/")[0] != "results":
+            raise ValueError(
+                f"experiment.results_path must be 'results' or start with 'results/', "
+                f"got {self.experiment.results_path!r}. The notebook always mounts its "
+                f"HOST_RESULTS_DIR (host ./results/) at the container path /results, "
+                f"so any other top-level name is unreachable inside the container."
+            )
         if self.iteration.end < self.iteration.start:
             raise ValueError(
                 f"iteration.end ({self.iteration.end}) must be >= "
