@@ -1087,8 +1087,11 @@ def summarize_pas_eval_metrics(
         gap analysis). If ``query_types`` is given, only those are kept;
         otherwise every remaining query type is kept and combined into one
         number, weighted by ``num_queries``.
-      * Metric columns: whichever of ``metric_names`` are present in the CSV
-        (default ``mAP``, ``Rank-1``, ``Rank-5``).
+      * Metric columns: ``metric_names`` (default ``mAP``, ``Rank-1``,
+        ``Rank-5``). Each metric's value is a weighted average over only the
+        matched rows where that column is present and parseable; a metric
+        with no usable values across all matched rows raises ``ValueError``
+        rather than being silently reported as ``0.0``.
 
     Args:
         eval_dir:      Experiment/round root dir; its ``evaluate/`` subdir
@@ -1132,6 +1135,7 @@ def summarize_pas_eval_metrics(
         raise ValueError(f"metric_names must name at least one metric column, got {metric_names!r}")
 
     sums = {metric: 0.0 for metric in metric_cols}
+    metric_query_counts = {metric: 0 for metric in metric_cols}
     total_queries = 0
     matched_query_types = set()
     with open(metrics_path, newline="", encoding="utf-8") as f:
@@ -1158,12 +1162,21 @@ def summarize_pas_eval_metrics(
                     sums[metric] += float(value) * n_queries
                 except ValueError:
                     continue
+                else:
+                    metric_query_counts[metric] += n_queries
             total_queries += n_queries
             matched_query_types.add(qtype or "(blank)")
 
     if total_queries == 0:
         raise ValueError(
             f"No {prefix}* rows matched query_types={query_types or 'all'!r} in {metrics_path}"
+        )
+
+    missing_metrics = [metric for metric in metric_cols if metric_query_counts[metric] == 0]
+    if missing_metrics:
+        raise ValueError(
+            f"No usable values for metric(s) {missing_metrics} among {prefix}* rows "
+            f"matched query_types={query_types or 'all'!r} in {metrics_path}"
         )
 
     result = {
@@ -1173,5 +1186,5 @@ def summarize_pas_eval_metrics(
         "num_queries": total_queries,
     }
     for metric in metric_cols:
-        result[metric] = sums[metric] / total_queries
+        result[metric] = sums[metric] / metric_query_counts[metric]
     return result
