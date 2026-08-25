@@ -1065,18 +1065,24 @@ def summarize_pas_eval_metrics(
 ) -> dict:
     """Compute the single headline metrics for a PAS CLIP eval run.
 
-    ``nvidia_pas_metrics.csv`` has one row per (Dataset, QueryType), plus
-    ``AVG_*``/``WAVG_*`` rollup rows. Different readers can pick different
-    rows/columns and land on different "the mAP for this round" numbers.
-    This function is the one place that decision is made, so every caller
-    (zero-shot summary, per-iteration summary, ad-hoc analysis) reads the
-    same number without re-deriving it from the CSV by hand.
+    The PAS eval writes three sibling CSVs per (Dataset, QueryType) round:
+    ``nvidia_pas_metrics.csv`` (one row per dataset/query-type, no rollups),
+    ``nvidia_pas_metrics_aggregate.csv`` (unweighted ``AVG_*`` rollup rows),
+    and ``nvidia_pas_metrics_weighted_aggregate.csv`` (``WAVG_*`` rollup
+    rows, each dataset weighted by its ``num_queries``). Different readers
+    can pick different files/rows/columns and land on different "the mAP
+    for this round" numbers. This function is the one place that decision
+    is made, so every caller (zero-shot summary, per-iteration summary,
+    ad-hoc analysis) reads the same number without re-deriving it from the
+    CSVs by hand.
 
     Fixed convention:
-      * Row selection: ``WAVG_*`` rows (each dataset weighted by its
-        ``num_queries``), not ``AVG_*`` (unweighted mean across datasets)
-        or a single dataset's row. Pass ``aggregate="unweighted"`` for
-        ``AVG_*`` instead.
+      * Source file / row selection: the weighted-aggregate CSV's
+        ``WAVG_*`` rows by default (each dataset weighted by its
+        ``num_queries``), not the unweighted-aggregate CSV's ``AVG_*`` rows
+        or a single dataset's row from the per-dataset CSV. Pass
+        ``aggregate="unweighted"`` to read ``AVG_*`` from the unweighted
+        aggregate CSV instead.
       * Query types: ``image_to_image`` rows are always excluded (mirrors
         gap analysis). If ``query_types`` is given, only those are kept;
         otherwise every remaining query type is kept and combined into one
@@ -1086,10 +1092,13 @@ def summarize_pas_eval_metrics(
 
     Args:
         eval_dir:      Experiment/round root dir; its ``evaluate/`` subdir
-                       must directly contain nvidia_pas_metrics.csv.
+                       must directly contain nvidia_pas_metrics.csv and its
+                       ``_aggregate``/``_weighted_aggregate`` siblings.
         query_types:   Optional comma-separated query-type filter.
         metric_names:  Comma-separated metric columns to extract.
-        aggregate:     ``"weighted"`` (WAVG_*) or ``"unweighted"`` (AVG_*).
+        aggregate:     ``"weighted"`` (WAVG_* from the weighted-aggregate
+                       CSV) or ``"unweighted"`` (AVG_* from the aggregate
+                       CSV).
 
     Returns:
         Dict with the resolved metric values, the total ``num_queries``
@@ -1106,11 +1115,16 @@ def summarize_pas_eval_metrics(
 
     if aggregate not in ("weighted", "unweighted"):
         raise ValueError(f"aggregate must be 'weighted' or 'unweighted', got {aggregate!r}")
-    prefix = "WAVG_" if aggregate == "weighted" else "AVG_"
+    if aggregate == "weighted":
+        prefix = "WAVG_"
+        agg_filename = "nvidia_pas_metrics_weighted_aggregate.csv"
+    else:
+        prefix = "AVG_"
+        agg_filename = "nvidia_pas_metrics_aggregate.csv"
 
-    metrics_path = os.path.join(eval_dir, "evaluate", "nvidia_pas_metrics.csv")
+    metrics_path = os.path.join(eval_dir, "evaluate", agg_filename)
     if not os.path.isfile(metrics_path):
-        raise FileNotFoundError(f"Could not find nvidia_pas_metrics.csv at {metrics_path}")
+        raise FileNotFoundError(f"Could not find {agg_filename} at {metrics_path}")
 
     qtype_filter = split_csv(query_types)
     metric_cols = [m.strip() for m in str(metric_names or "").split(",") if m.strip()]
