@@ -4,44 +4,34 @@
   attribute metadata under a dataset folder and print a summary report.
 """
 
-import json
 import os
+
+from pas_deft.pairs_io import iter_json_records
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp"}
 
 
 def _peek_json_records(path, sample_limit=3):
-    """Read a JSON/JSONL file and report row count, sample rows, and query_type counts."""
+    """Read a .json file and report row count, sample rows, and query_type counts.
+
+    Accepts both on-disk shapes :func:`pas_deft.pairs_io.iter_json_records`
+    understands: a pretty-printed JSON array, and the line-delimited array
+    this package's own writers emit.
+    """
     sample = []
     query_types = {}
     count = 0
     try:
-        with open(path, "r", encoding="utf-8") as f:
-            first = f.readline()
-            second = f.readline()
-        line_delimited = first.strip().startswith("{") or (
-            first.strip() == "[" and second.strip().startswith("{")
-        )
-        with open(path, "r", encoding="utf-8") as f:
-            if line_delimited:
-                rows = (
-                    json.loads(line.strip().rstrip(","))
-                    for line in f
-                    if line.strip() not in ("", "[", "]")
-                )
-            else:
-                loaded = json.load(f)
-                rows = loaded if isinstance(loaded, list) else [loaded]
-            for row in rows:
-                if not isinstance(row, dict):
-                    continue
-                count += 1
-                if len(sample) < sample_limit:
-                    sample.append(row)
-                qtype = str(row.get("query_type") or "").strip()
-                if qtype:
-                    query_types[qtype] = query_types.get(qtype, 0) + 1
-    except (OSError, json.JSONDecodeError):
+        for row in iter_json_records(path):
+            if not isinstance(row, dict):
+                continue
+            count += 1
+            if len(sample) < sample_limit:
+                sample.append(row)
+            qtype = str(row.get("query_type") or "").strip()
+            if qtype:
+                query_types[qtype] = query_types.get(qtype, 0) + 1
+    except (OSError, ValueError):
         return None
     return {"count": count, "sample": sample, "query_types": query_types}
 
@@ -52,7 +42,7 @@ def report_dataset_layout(dataset_root: str, max_depth: int = 6, top_n: int = 15
     Walks ``dataset_root`` and classifies each directory/file:
 
     * Crops:               directories containing image files.
-    * Queries:              JSON/JSONL files whose rows look like pairs
+    * Queries:              .json files whose rows look like pairs
                             records (``caption``/``image_path`` keys), with
                             row counts and ``query_type`` breakdowns.
     * Attribute metadata:   directories containing ``.txt`` caption files.
@@ -68,6 +58,9 @@ def report_dataset_layout(dataset_root: str, max_depth: int = 6, top_n: int = 15
     Returns:
         Dict with ``image_dirs``, ``query_files``, and ``text_dirs`` lists.
     """
+    if not os.path.isdir(dataset_root):
+        raise FileNotFoundError(f"dataset_root is not a directory: {dataset_root}")
+
     image_dirs = []
     text_dirs = []
     query_files = []

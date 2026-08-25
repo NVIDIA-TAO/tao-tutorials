@@ -70,6 +70,9 @@ def materialize_pas_eval_split(
             pairs_handle = open(eval_pairs_file, "w", encoding="utf-8")
             pairs_handle.write("[\n")
         for row in iter_json_records(eval_pairs_source_file):
+            if not isinstance(row, dict):
+                eval_skipped += 1
+                continue
             query_type = str(row.get("query_type") or "").strip()
             if qtypes and query_type not in qtypes:
                 eval_skipped += 1
@@ -98,6 +101,11 @@ def materialize_pas_eval_split(
                 for name in eval_images:
                     f.write(f"{name}\n")
 
+        if val_image_list_file and val_sample_size > 0 and not eval_images:
+            print(
+                f"WARNING: no eval images matched query_types={query_types or 'all'!r}; "
+                f"not writing val_image_list_file {val_image_list_file}"
+            )
         if val_image_list_file and val_sample_size > 0 and eval_images:
             rng = random.Random(42)
             sample = rng.sample(eval_images, min(val_sample_size, len(eval_images)))
@@ -189,6 +197,9 @@ def materialize_pas_training_split(
             seed_pairs_handle.write("[\n")
 
         for row in iter_json_records(train_pairs_source_file):
+            if not isinstance(row, dict):
+                skipped_unknown_dataset += 1
+                continue
             query_type = str(row.get("query_type") or "").strip()
             if qtypes and query_type not in qtypes:
                 skipped_query_type += 1
@@ -348,6 +359,9 @@ def materialize_pas_pool_split(
             pool_pairs_handle.write("[\n")
 
         for row in iter_json_records(pool_pairs_source_file):
+            if not isinstance(row, dict):
+                skipped_unknown_dataset += 1
+                continue
             query_type = str(row.get("query_type") or "").strip()
             if qtypes and query_type not in qtypes:
                 skipped_query_type += 1

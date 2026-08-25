@@ -342,6 +342,9 @@ def _build_source_dict(raw: dict, mining_spec: dict) -> dict:
                 caption_expansion["count_expanded_pairs_toward_target"]
             ).lower()
         mining_out["caption_expansion"] = caption_expansion
+    for key in ("topn", "knn_metric"):
+        if not isinstance(mining_spec, dict) or key not in mining_spec:
+            raise ValueError(f"mining_spec.yaml is missing required key {key!r}")
     mining_out["topn"] = mining_spec["topn"]
     mining_out["knn_metric"] = mining_spec["knn_metric"]
 

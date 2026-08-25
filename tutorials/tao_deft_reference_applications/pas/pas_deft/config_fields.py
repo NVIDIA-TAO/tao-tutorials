@@ -7,6 +7,7 @@ actual default. This keeps every config option documented and constrained at its
 site instead of scattered across ad-hoc parsing code.
 """
 
+import copy
 from dataclasses import field
 
 
@@ -53,4 +54,4 @@ def BOOL_FIELD(value, **meta_args):
 def DATACLASS_FIELD(default_instance, **meta_args):
     """Field for a nested dataclass section, documented with a description."""
     metadata = _base_metadata("collection", "", "", meta_args)
-    return field(default_factory=lambda: default_instance, metadata=metadata)
+    return field(default_factory=lambda: copy.deepcopy(default_instance), metadata=metadata)

@@ -132,8 +132,11 @@ def normalize_row(row):
     """Canonicalize one pairs record, or return None if it is unusable.
 
     A row needs a ``unique_name``, a ``caption``, and a ``dataset`` (inferred
-    from ``image_path`` when absent); other fields are passed through.
+    from ``image_path`` when absent); other fields are passed through. A
+    non-dict record (e.g. a stray array/string entry) is also unusable.
     """
+    if not isinstance(row, dict):
+        return None
     unique_name = str(row.get("unique_name") or "").strip()
     caption = str(row.get("caption") or "").strip()
     image_path = str(row.get("image_path") or "").strip()

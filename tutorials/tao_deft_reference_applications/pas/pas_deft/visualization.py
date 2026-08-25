@@ -301,7 +301,7 @@ body {{ font-family: Arial, sans-serif; margin: 20px; }}
             pair_by_name[name] = row
 
     mined = mined.copy()
-    mined["unique_name"] = mined["filepath"].map(os.path.basename)
+    mined["unique_name"] = mined["filepath"].fillna("").astype(str).map(os.path.basename)
     if pair_by_name:
         mined["dataset"] = mined["unique_name"].map(
             lambda n: str(pair_by_name.get(n, {}).get("dataset") or "")
