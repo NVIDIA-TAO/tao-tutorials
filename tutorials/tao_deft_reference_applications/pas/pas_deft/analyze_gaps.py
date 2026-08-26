@@ -62,7 +62,6 @@ def analyze_clip_inference_gaps(
 
     from pas_deft.pairs_io import infer_dataset, iter_json_records, split_csv
 
-    import glob
     import re
     from collections import Counter, defaultdict
 
@@ -189,60 +188,6 @@ def analyze_clip_inference_gaps(
                 attrs.append(name)
         return attrs
 
-    def _normalize_attribute_name(value):
-        raw = str(value or "").strip()
-        low = raw.lower().replace("-", "_").replace(" ", "_")
-        if not raw:
-            return ""
-        checks = [
-            ("Color terms", ("color", "colour", "black", "white", "blue", "red", "green")),
-            ("Top clothing", ("upper", "top", "shirt", "coat", "jacket", "dress", "hoodie")),
-            ("Bottom clothing", ("lower", "bottom", "pants", "trouser", "jeans", "shorts", "skirt")),
-            ("Shoe terms", ("shoe", "sneaker", "boot", "sandal", "footwear")),
-            ("Accessories", ("access", "bag", "hat", "cap", "glasses", "mask", "umbrella")),
-            ("Hair/head", ("hair", "head", "bald", "ponytail")),
-            ("Body/view/action", ("body", "view", "action", "pose", "gender", "age", "person")),
-            ("Pattern/logo", ("pattern", "logo", "stripe", "print", "plaid")),
-        ]
-        for name, needles in checks:
-            if any(token in low for token in needles):
-                return name
-        return raw
-
-    def _query_text(query):
-        for key in ("query_text", "caption", "text", "query"):
-            value = str(query.get(key) or "").strip()
-            if value:
-                return value
-        return ""
-
-    def _query_metrics(query):
-        matches = list(query.get("top_matches", []) or [])
-        flags = [bool(m.get("is_correct")) for m in matches if isinstance(m, dict)]
-        correct = sum(1 for ok in flags[:14] if ok)
-        try:
-            gt = int(query.get("num_ground_truth") or 0)
-        except (TypeError, ValueError):
-            gt = 0
-        denom = max(1, min(14, gt))
-        first = next((idx + 1 for idx, ok in enumerate(flags[:14]) if ok), 15)
-        return {
-            "Rank-1": 1.0 if flags and flags[0] else 0.0,
-            "Match@14": correct / denom,
-            "Zero@14": 1.0 if correct == 0 else 0.0,
-            "First@14": float(first),
-        }
-
-    def _metric_from_sums(sums, metric):
-        n = max(1, int(sums["n"]))
-        if metric == "Match@14":
-            return sums["Match@14"] / n
-        if metric == "Zero@14":
-            return sums["Zero@14"] / n
-        if metric in ("First@14", "First Pos"):
-            return sums["First@14"] / n
-        return sums["Rank-1"] / n
-
     metrics_path = os.path.join(results_dir, "nvidia_pas_metrics.csv")
     if not os.path.isfile(metrics_path):
         raise FileNotFoundError(f"Could not find nvidia_pas_metrics.csv at {metrics_path}")
@@ -284,8 +229,6 @@ def analyze_clip_inference_gaps(
             metric_rows.append({
                 "dataset": dataset,
                 "query_type": qtype,
-                "attribute": "",
-                "raw_attribute": str(row.get("EasyAttribute") or ""),
                 "metric_name": metric_name,
                 "metric_value": metric_value,
                 "num_queries": n_queries,
@@ -294,58 +237,7 @@ def analyze_clip_inference_gaps(
     if not metric_rows:
         raise ValueError(f"No usable PAS metric rows found in {metrics_path}")
 
-    result_paths = []
-    result_roots = [
-        results_dir,
-        os.path.join(results_dir, "evaluate"),
-        os.path.join(results_dir, "pas_eval"),
-    ]
-    seen_paths = set()
-    for root in result_roots:
-        if not os.path.isdir(root):
-            continue
-        for path in glob.glob(os.path.join(root, "**", "*_results.json"), recursive=True):
-            if path not in seen_paths:
-                result_paths.append(path)
-                seen_paths.add(path)
-
-    attr_sums = defaultdict(lambda: {
-        "n": 0, "Rank-1": 0.0, "Match@14": 0.0,
-        "Zero@14": 0.0, "First@14": 0.0,
-    })
-    for path in result_paths:
-        dataset = os.path.basename(path).replace("_results.json", "")
-        with open(path, "r", encoding="utf-8") as f:
-            payload = json.load(f)
-        for query in payload.get("queries", []) or []:
-            qtype = str(query.get("query_type") or "").strip()
-            if selection_qtype_filter and qtype not in selection_qtype_filter:
-                continue
-            attrs = _attributes(_query_text(query))
-            if not attrs:
-                continue
-            query_metric = _query_metrics(query)
-            for attr in attrs:
-                sums = attr_sums[(dataset, qtype, attr, attr, "per_query_results_json")]
-                sums["n"] += 1
-                for key in ("Rank-1", "Match@14", "Zero@14", "First@14"):
-                    sums[key] += query_metric[key]
-
     attribute_rows = []
-    for (dataset, qtype, attr, raw_attr, basis), sums in attr_sums.items():
-        if int(sums["n"]) < min_num_queries:
-            continue
-        metric_for_rows = metric_name if metric_name in sums or metric_name == "First Pos" else "Rank-1"
-        attribute_rows.append({
-            "dataset": dataset,
-            "query_type": qtype,
-            "attribute": attr,
-            "raw_attribute": raw_attr,
-            "metric_name": metric_for_rows,
-            "metric_value": _metric_from_sums(sums, metric_for_rows),
-            "num_queries": int(sums["n"]),
-            "selection_basis": basis,
-        })
 
     selection_pair_rows = []
     selection_qtype_counts = Counter()
@@ -381,71 +273,52 @@ def analyze_clip_inference_gaps(
             f"{selection_qtype_label!r}; cannot select weak attributes."
         )
 
-    if not attribute_rows:
-        for row in metric_rows:
-            raw_attr = str(row.get("raw_attribute") or "").strip()
-            attr = _normalize_attribute_name(raw_attr)
-            if not raw_attr or not attr:
-                continue
-            attribute_rows.append({
-                "dataset": row["dataset"],
-                "query_type": row["query_type"],
-                "attribute": attr,
-                "raw_attribute": raw_attr,
-                "metric_name": row["metric_name"],
-                "metric_value": row["metric_value"],
-                "num_queries": row["num_queries"],
-                "selection_basis": "metrics_csv_easy_attribute",
-            })
-
-    if not attribute_rows:
-        metric_by_slice = {
-            (row["dataset"], row["query_type"]): row
-            for row in metric_rows
-        }
-        proxy_sums = defaultdict(lambda: {
-            "n": 0,
-            "metric_sum": 0.0,
-            "datasets": Counter(),
-            "query_types": Counter(),
+    metric_by_slice = {
+        (row["dataset"], row["query_type"]): row
+        for row in metric_rows
+    }
+    proxy_sums = defaultdict(lambda: {
+        "n": 0,
+        "metric_sum": 0.0,
+        "datasets": Counter(),
+        "query_types": Counter(),
+    })
+    for row in selection_pair_rows:
+        metric_row = metric_by_slice.get(
+            (row["dataset"], row["query_type"])
+        )
+        if not metric_row:
+            continue
+        attrs = _attributes(row.get("caption", ""))
+        if not attrs:
+            continue
+        for attr in attrs:
+            sums = proxy_sums[attr]
+            sums["n"] += 1
+            sums["metric_sum"] += float(metric_row["metric_value"])
+            sums["datasets"][row["dataset"]] += 1
+            sums["query_types"][row["query_type"]] += 1
+    for attr, sums in proxy_sums.items():
+        if int(sums["n"]) < min_num_queries:
+            continue
+        attribute_rows.append({
+            "dataset": "ALL",
+            "query_type": selection_qtype_label,
+            "attribute": attr,
+            "raw_attribute": attr,
+            "metric_name": metric_name,
+            "metric_value": sums["metric_sum"] / max(1, int(sums["n"])),
+            "num_queries": int(sums["n"]),
+            "selection_basis": "metrics_csv_attribute_proxy",
+            "datasets": ";".join(sums["datasets"].keys()),
+            "query_types": ";".join(sums["query_types"].keys()),
         })
-        for row in selection_pair_rows:
-            metric_row = metric_by_slice.get(
-                (row["dataset"], row["query_type"])
-            )
-            if not metric_row:
-                continue
-            attrs = _attributes(row.get("caption", ""))
-            if not attrs:
-                continue
-            for attr in attrs:
-                sums = proxy_sums[attr]
-                sums["n"] += 1
-                sums["metric_sum"] += float(metric_row["metric_value"])
-                sums["datasets"][row["dataset"]] += 1
-                sums["query_types"][row["query_type"]] += 1
-        for attr, sums in proxy_sums.items():
-            if int(sums["n"]) < min_num_queries:
-                continue
-            attribute_rows.append({
-                "dataset": "ALL",
-                "query_type": selection_qtype_label,
-                "attribute": attr,
-                "raw_attribute": attr,
-                "metric_name": metric_name,
-                "metric_value": sums["metric_sum"] / max(1, int(sums["n"])),
-                "num_queries": int(sums["n"]),
-                "selection_basis": "metrics_csv_attribute_proxy",
-                "datasets": ";".join(sums["datasets"].keys()),
-                "query_types": ";".join(sums["query_types"].keys()),
-            })
 
     metric_rows = sorted(metric_rows, key=lambda r: r["metric_value"], reverse=high_is_weak)
     attribute_rows = sorted(attribute_rows, key=lambda r: r["metric_value"], reverse=high_is_weak)
     if not attribute_rows:
         raise ValueError(
-            "No attribute metrics could be derived from per-query results, "
-            "EasyAttribute metrics, or KPI "
+            "No attribute metrics could be derived from KPI "
             f"captions filtered by query_types={selection_qtype_label!r}."
         )
     weak_groups = attribute_rows[:weak_attribute_topk or len(attribute_rows)]
@@ -994,7 +867,6 @@ def analyze_clip_inference_gaps(
         f"KPI pairs: {kpi_pairs_file}",
         f"Weak metric: {metric_name} ({'higher' if high_is_weak else 'lower'} is weaker)",
         f"Selection basis: {selection_basis}",
-        f"Detailed result JSON files: {len(result_paths)}",
         f"Weak groups selected: {len(weak_groups)}",
         f"Attribute selection query types: {selection_qtype_label}",
         f"KPI selection pair rows: {len(selection_pair_rows)}",
