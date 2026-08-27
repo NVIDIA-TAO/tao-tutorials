@@ -861,13 +861,16 @@ def analyze_clip_inference_gaps(
                 f"{int(row['sampled'])}"
             )
 
+    rank_direction = "highest" if high_is_weak else "lowest"
+    rank_basis_note = f"ranked by {rank_direction} {metric_name} (ties broken by attribute ordering)"
+
     summary_lines = [
         "PAS weak-attribute gap analysis",
         f"Metrics: {metrics_path}",
         f"KPI pairs: {kpi_pairs_file}",
         f"Weak metric: {metric_name} ({'higher' if high_is_weak else 'lower'} is weaker)",
         f"Selection basis: {selection_basis}",
-        f"Weak groups selected: {len(weak_groups)}",
+        f"Weak groups picked ({rank_basis_note}): {len(weak_groups)}",
         f"Attribute selection query types: {selection_qtype_label}",
         f"KPI selection pair rows: {len(selection_pair_rows)}",
         f"Mined output target query budget: {target_query_count or 'unlimited'}",
@@ -878,7 +881,7 @@ def analyze_clip_inference_gaps(
         f"Caption diversity summary CSV: {caption_diversity_summary_path if caption_diversity_on else 'disabled'}",
         "Note: mined output budget is applied after kNN and source-pair recovery.",
         f"Selected seed query rows: {len(selected_queries)}",
-        f"Weak query rows emitted: {len(gaps_df)}",
+        f"Weak query rows emitted ({rank_basis_note}): {len(gaps_df)}",
         f"Skipped/malformed pair rows: {skipped_pairs}",
         f"Weak samples parquet: {gaps_parquet}",
         f"Weak samples CSV: {samples_csv_path}",

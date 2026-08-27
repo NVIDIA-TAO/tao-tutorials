@@ -1588,6 +1588,7 @@ def write_iteration_summary(
     query_types: str = "",
     metric_names: str = "mAP,Rank-1,Rank-5",
     prev_summary_file: str = "",
+    mining_stats_file: str = "",
 ) -> str:
     """Write iteration_summary.json at the end of a DEFT iteration.
 
@@ -1621,6 +1622,11 @@ def write_iteration_summary(
         prev_summary_file:    Optional path to the previous round's
                                iteration_summary.json (or zero-shot summary),
                                used to compute per-metric deltas.
+        mining_stats_file:    Optional path to this iteration's
+                               ``mined_stats.json``. Its target/selected counts are
+                               folded into the ``mining`` field so a reader can see
+                               how many samples this round actually trained on versus
+                               how many it asked for.
 
     Returns:
         Path to the written iteration_summary.json.
@@ -1653,6 +1659,30 @@ def write_iteration_summary(
                 f"WARNING: iteration {iter_num} published checkpoint was NOT "
                 f"selected by its validation metric — see "
                 f"checkpoint_selection in {os.path.join(experiment_dir, 'iteration_summary.json')}"
+            )
+
+    if mining_stats_file and os.path.isfile(mining_stats_file):
+        with open(mining_stats_file, "r", encoding="utf-8") as f:
+            mining_stats = json.load(f)
+        target = mining_stats.get("target_query_count")
+        selected = mining_stats.get(
+            "selected_count", mining_stats.get("final_unique_basenames")
+        )
+        shortfall = mining_stats.get(
+            "selection_shortfall", mining_stats.get("target_pair_shortfall")
+        )
+        payload["mining"] = {
+            "target_query_count": target,
+            "selected_count": selected,
+            "shortfall": shortfall,
+            "mode": mining_stats.get("mode", ""),
+            "stats_file": mining_stats_file,
+        }
+        if shortfall:
+            print(
+                f"WARNING: iteration {iter_num} mined {selected} of {target} "
+                f"requested samples ({shortfall} short) — see mining in "
+                f"{os.path.join(experiment_dir, 'iteration_summary.json')}"
             )
 
     metrics = summarize_pas_eval_metrics(
